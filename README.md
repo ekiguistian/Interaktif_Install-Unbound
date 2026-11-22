@@ -14,7 +14,14 @@ Pada 22 November 2026, rilis terbaru yang tercatat adalah Ubuntu 26.10, Ubuntu 2
 
 ## Menjalankan installer
 
-Simpan atau clone repository di server. Jika Git belum tersedia untuk proses clone, salin file repository ke server atau pasang Git terlebih dahulu. Installer tetap memeriksa dan memasang dependensi yang belum tersedia.
+Login sebagai `root`. Perbarui APT dan pasang Git agar repository dapat di-clone:
+
+```bash
+apt-get update
+apt-get install -y git ca-certificates curl
+```
+
+Clone repository, lalu jalankan installer:
 
 ```bash
 git clone https://github.com/ekiguistian/Interaktif_Install-Unbound.git
@@ -23,7 +30,7 @@ chmod +x instalasi-unbound-interaktif.sh
 ./instalasi-unbound-interaktif.sh
 ```
 
-Jalankan dengan akun yang memiliki sudo. Jika sudo belum terpasang, jalankan sebagai root agar installer dapat memasangnya.
+Jika memakai akun biasa, tambahkan `sudo` pada dua perintah APT saja. Jalankan `git clone` dan installer sebagai akun tersebut dengan hak sudo. Installer akan kembali menjalankan `apt-get update`, lalu memeriksa dan memasang dependensi sistem yang belum tersedia. Jika `sudo` belum terpasang, jalankan installer sebagai `root`.
 
 ## Alur installer
 
