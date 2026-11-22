@@ -591,7 +591,7 @@ ask_interfaces() {
     local -a items
     INTERFACE_IPS=()
     while true; do
-        raw="$(ask_default 'IP Interface IPv4/IPv6 (pisahkan beberapa dengan koma)' '127.0.0.1,10.10.10.10')"
+        raw="$(ask_default 'IP Interface IPv4/IPv6 (pisahkan beberapa dengan koma)' '127.0.0.1,192.168.1.10')"
         raw="${raw//;/,}"
         IFS=',' read -r -a items <<< "$raw"
         valid=1
@@ -614,7 +614,7 @@ ask_access_networks() {
     local -a items parts
     ACCESS_NETWORKS=()
     while true; do
-        raw="$(ask_default 'IP Allow akses / CIDR (pisahkan beberapa dengan koma)' '0.0.0.0/0')"
+        raw="$(ask_default 'IP Allow akses / CIDR (pisahkan beberapa dengan koma)' '192.168.1.0/24')"
         raw="${raw//;/,}"
         IFS=',' read -r -a items <<< "$raw"
         valid=1
@@ -628,7 +628,7 @@ ask_access_networks() {
             [[ " ${ACCESS_NETWORKS[*]} " == *" $network "* ]] || ACCESS_NETWORKS+=("$network")
         done
         if ((valid)) && ((${#ACCESS_NETWORKS[@]} > 0)); then return; fi
-        printf 'IP/CIDR tidak valid. Contoh: 10.10.10.0/24 atau 2001:db8::/64.\n' >&2
+        printf 'IP/CIDR tidak valid. Contoh: 192.168.1.0/24.\n' >&2
     done
 }
 
@@ -636,7 +636,7 @@ ask_domain() {
     local name candidate label
     local -a labels
     while true; do
-        name="$(ask_default 'IN PTR / nama host' 'resolver1.nexan.id')"
+        name="$(ask_default 'IN PTR / nama host' 'resolver1.yourdomain.com')"
         candidate="${name%.}"
         if [[ ${#candidate} -le 253 && "$candidate" == *.* && "$candidate" != .* && "$candidate" != *. ]]; then
             IFS='.' read -r -a labels <<< "$candidate"
@@ -652,7 +652,7 @@ ask_domain() {
                 return
             fi
         fi
-        printf 'Nama DNS tidak valid. Contoh: resolver1.nexan.id\n' >&2
+        printf 'Nama DNS tidak valid. Contoh: resolver1.yourdomain.com\n' >&2
     done
 }
 
@@ -1173,8 +1173,8 @@ remote-control:
 # Public TLDs (including .id) are resolved automatically in root mode.
 # For a private delegated zone, add a forward-zone block, for example:
 # forward-zone:
-#     name: "corp."
-#     forward-addr: 10.10.10.53
+#     name: "yourdomain.com."
+#     forward-addr: 192.168.1.53
 EOF
     } > "$CONF_TMP"
 
@@ -1348,8 +1348,8 @@ apply_firewall() {
         return 1
     fi
     local dns_output dnssec_output
-    dns_output="$(dig @127.0.0.1 example.com A +time=5 +tries=1 +noall +comments +answer 2>&1)" || true
-    if [[ "$dns_output" != *'status: NOERROR'* || "$dns_output" != *'example.com.'* ]]; then
+    dns_output="$(dig @127.0.0.1 cloudflare.com A +time=5 +tries=1 +noall +comments +answer 2>&1)" || true
+    if [[ "$dns_output" != *'status: NOERROR'* || "$dns_output" != *'cloudflare.com.'* ]]; then
         error 'Unbound belum berhasil menyelesaikan query Internet melalui 127.0.0.1 setelah UFW aktif; konfigurasi Unbound sebelumnya dipulihkan.'
         printf '%s\n' "$dns_output" >&2
         rollback_unbound_install /etc/unbound/unbound.conf "$UNBOUND_CONFIG_BACKUP" "$UNBOUND_CONFIG_EXISTED"
@@ -1364,8 +1364,8 @@ apply_firewall() {
     fi
     for ip in "${INTERFACE_IPS[@]}"; do
         [[ "$ip" == 127.0.0.1 || "$ip" == ::1 ]] && continue
-        interface_output="$(dig "@$ip" example.com A +time=5 +tries=1 +noall +comments +answer 2>&1)" || true
-        if [[ "$interface_output" != *'status: NOERROR'* || "$interface_output" != *'example.com.'* ]]; then
+        interface_output="$(dig "@$ip" cloudflare.com A +time=5 +tries=1 +noall +comments +answer 2>&1)" || true
+        if [[ "$interface_output" != *'status: NOERROR'* || "$interface_output" != *'cloudflare.com.'* ]]; then
             error "Unbound gagal menjawab melalui interface $ip; periksa alamat IP dan firewall. Konfigurasi Unbound sebelumnya dipulihkan."
             printf '%s\n' "$interface_output" >&2
             rollback_unbound_install /etc/unbound/unbound.conf "$UNBOUND_CONFIG_BACKUP" "$UNBOUND_CONFIG_EXISTED"
@@ -1394,8 +1394,8 @@ configure_vm_system_resolver() {
     fi
     rm -f -- "$resolver_tmp"
 
-    system_dns_output="$(dig example.com A +time=5 +tries=1 +noall +comments +answer 2>&1)" || true
-    if [[ "$system_dns_output" != *'status: NOERROR'* || "$system_dns_output" != *'example.com.'* ]] ||
+    system_dns_output="$(dig cloudflare.com A +time=5 +tries=1 +noall +comments +answer 2>&1)" || true
+    if [[ "$system_dns_output" != *'status: NOERROR'* || "$system_dns_output" != *'cloudflare.com.'* ]] ||
         ! grep -qE '^[[:space:]]*nameserver[[:space:]]+127\.0\.0\.1([[:space:]]|$)' "$resolver_file"; then
         error 'Resolver host gagal setelah diarahkan ke 127.0.0.1; memulihkan resolver sebelumnya.'
         printf '%s\n' "$system_dns_output" >&2

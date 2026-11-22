@@ -3,7 +3,7 @@ server:
     num-threads: 4
 
     interface: 127.0.0.1
-    interface: 10.10.10.10
+    interface: 192.168.1.10
     port: 53
     do-ip4: yes
     do-ip6: no
@@ -11,7 +11,7 @@ server:
     do-tcp: yes
 
     access-control: 127.0.0.0/8 allow
-    access-control: 10.10.10.0/24 allow
+    access-control: 192.168.1.0/24 allow
 
     so-reuseport: yes
     so-rcvbuf: 4m
@@ -38,7 +38,7 @@ server:
     auto-trust-anchor-file: "/var/lib/unbound/root.key"
     root-hints: "/var/lib/unbound/root.hints"
 
-    local-data-ptr: "10.10.10.10 resolver1.nexan.id."
+    local-data-ptr: "192.168.1.10 resolver1.yourdomain.com."
     use-syslog: yes
     log-queries: yes
     log-replies: yes

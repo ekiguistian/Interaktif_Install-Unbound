@@ -2,4 +2,6 @@
 /blocklist-sources.json
 /zabbix_agentd.conf
 /.unbound-installer-rollback/
+/dnsperf-results/
+__pycache__/
 *.bak.*

@@ -23,7 +23,7 @@ TEMP_WHITELIST = "/usr/local/bin/last-verified-whitelist.txt"
 
 LOG_FILE = "/var/log/unbound-localzone.log"
 
-REDIRECT_IP = "103.147.246.189"
+REDIRECT_IP = "192.168.1.10"
 
 SOURCES = [
     "https://raw.githubusercontent.com/alsyundawy/TrustPositif/refs/heads/main/gambling_indonesia_domainonly.txt",
@@ -32,9 +32,7 @@ SOURCES = [
     "https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/porn-only/hosts",
 ]
 
-WHITELIST_URLS = [
-    "https://raw.githubusercontent.com/ekiguistian/whitelist-host/refs/heads/main/whitelist-domain.txt"
-]
+WHITELIST_URLS = []
 CONFIG_FILE = os.environ.get("UNBOUND_BLOCKLIST_CONFIG", "/etc/unbound/blocklist/sources.json")
 
 # =========================
@@ -69,8 +67,8 @@ def load_settings(config_file):
         redirect_ip = str(config.get("redirect_ip", REDIRECT_IP)).strip()
         if not isinstance(block_sources, list) or not block_sources:
             raise ValueError("blocklist_sources harus berupa list URL dan tidak boleh kosong")
-        if not isinstance(whitelist_sources, list) or not whitelist_sources:
-            raise ValueError("whitelist_sources harus berupa list URL dan tidak boleh kosong")
+        if not isinstance(whitelist_sources, list):
+            raise ValueError("whitelist_sources harus berupa list URL")
         for url in block_sources + whitelist_sources:
             if not isinstance(url, str) or not url.startswith("https://"):
                 raise ValueError("semua URL sumber harus menggunakan https://")
@@ -226,7 +224,7 @@ def main():
             if normalized_whitelist:
                 whitelist.add(normalized_whitelist)
 
-    if whitelist_success == 0:
+    if whitelist_urls and whitelist_success == 0:
         log("[ERROR] no whitelist source could be downloaded; keeping the previous config")
         sys.exit(1)
 
