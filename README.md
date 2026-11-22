@@ -43,10 +43,10 @@ Clone repository lalu jalankan dari direktori tempat file lokal ingin disimpan:
 git clone https://github.com/ekiguistian/Interaktif_Install-Unbound.git
 cd Interaktif_Install-Unbound
 chmod +x instalasi-unbound-interaktif.sh
-sudo ./instalasi-unbound-interaktif.sh
+./instalasi-unbound-interaktif.sh
 ```
 
-Installer menyimpan salinan konfigurasi lokal di direktori kerja dan memasang konfigurasi aktif ke sistem. File sistem yang sebelumnya ada dicadangkan sebelum diganti.
+Jalankan sebagai pengguna dengan hak sudo agar output lokal tetap dimiliki pengguna tersebut. Jika sudo belum tersedia, jalankan sebagai root. Installer menyimpan salinan konfigurasi lokal di direktori kerja dan memasang konfigurasi aktif ke sistem. File sistem yang sebelumnya ada dicadangkan sebelum diganti.
 
 ## Alur aplikasi
 
