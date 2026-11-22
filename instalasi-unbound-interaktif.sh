@@ -13,14 +13,52 @@ UNBOUND_CONFIG_BACKUP=''
 UNBOUND_CONFIG_EXISTED='no'
 APT_INDEX_UPDATED='no'
 RESOLV_CONF_BACKUP=''
+TRANSACTION_DIR=''
+TRANSACTION_ACTIVE='no'
+INSTALL_COMPLETE='no'
+ROLLBACK_FAILED='no'
+declare -a TRANSACTION_PATHS=(
+    /etc/apt
+    /etc/unbound
+    /etc/zabbix
+    /etc/sudoers
+    /etc/sudoers.d
+    /etc/ufw
+    /etc/default
+    /etc/ca-certificates
+    /etc/ssl/certs
+    /etc/resolv.conf
+    /etc/systemd/system
+    /usr/local/bin/autoupdate-blocklist.py
+    /var/lib/unbound
+    /var/lib/zabbix
+    /var/log/unbound-localzone.log
+)
+declare -a TRANSACTION_SERVICES=(unbound unbound-resolvconf.service zabbix-agent unbound-blocklist-update.timer)
 
-trap 'if [[ -n "${CONF_TMP:-}" && -f "$CONF_TMP" ]]; then rm -f -- "$CONF_TMP"; fi' EXIT
 on_error() {
     local code=$? line="${BASH_LINENO[0]:-unknown}"
     error "Proses berhenti pada baris $line (exit $code). Periksa pesan di atas sebelum menjalankan ulang."
     exit "$code"
 }
+on_exit() {
+    local exit_code="${1:-0}"
+    trap - EXIT ERR
+    set +e
+    if [[ -n "${CONF_TMP:-}" && -f "$CONF_TMP" ]]; then rm -f -- "$CONF_TMP"; fi
+
+    if [[ "$TRANSACTION_ACTIVE" == yes && "$INSTALL_COMPLETE" != yes ]]; then
+        rollback_transaction || exit_code=1
+    elif [[ "$INSTALL_COMPLETE" == yes && -n "$TRANSACTION_DIR" && -d "$TRANSACTION_DIR" ]]; then
+        run_as_root rm -f -- "$TRANSACTION_DIR/active"
+        run_as_root rm -rf -- "$TRANSACTION_DIR"
+    elif [[ -n "$TRANSACTION_DIR" && -d "$TRANSACTION_DIR" && ! -f "$TRANSACTION_DIR/active" ]]; then
+        run_as_root rm -rf -- "$TRANSACTION_DIR"
+    fi
+    exit "$exit_code"
+}
 trap on_error ERR
+trap 'on_exit $?' EXIT
 
 info() { printf '\n%s\n' "$*"; }
 warn() { printf 'PERINGATAN: %s\n' "$*" >&2; }
@@ -43,6 +81,16 @@ run_as_root() {
     fi
 }
 
+check_root_access() {
+    if (( EUID == 0 )); then return 0; fi
+    if ! command -v sudo >/dev/null 2>&1; then
+        error 'sudo belum tersedia. Jalankan installer sebagai root agar sudo dapat dipasang.'
+        return 1
+    fi
+    info 'Memvalidasi akses sudo...'
+    sudo -v || { error 'Hak sudo tidak tersedia. Jalankan sebagai root atau pengguna sudo.'; return 1; }
+}
+
 refresh_apt_indexes() {
     if ! command -v apt-get >/dev/null 2>&1; then
         error 'Package manager APT tidak ditemukan. Installer ini ditujukan untuk Ubuntu dan Debian.'
@@ -56,7 +104,208 @@ refresh_apt_indexes() {
 install_packages() {
     local packages=("$@")
     if [[ "$APT_INDEX_UPDATED" != yes ]]; then refresh_apt_indexes; fi
-    run_as_root apt-get install -y "${packages[@]}"
+    run_as_root apt-get install -y --no-upgrade "${packages[@]}"
+}
+
+snapshot_local_outputs() {
+    local path name
+    local -a files=()
+    shopt -s nullglob
+    files=(
+        "$OUTPUT_DIR/unbound.conf" "$OUTPUT_DIR/unbound.conf.bak."*
+        "$OUTPUT_DIR/blocklist-sources.json" "$OUTPUT_DIR/blocklist-sources.json.bak."*
+        "$OUTPUT_DIR/zabbix_agentd.conf" "$OUTPUT_DIR/zabbix_agentd.conf.bak."*
+    )
+    shopt -u nullglob
+    : > "$TRANSACTION_DIR/local-files.present"
+    for path in "${files[@]}"; do
+        [[ -e "$path" || -L "$path" ]] || continue
+        name="${path##*/}"
+        cp -a -- "$path" "$TRANSACTION_DIR/local-files/$name" || return 1
+        printf '%s\n' "$name" >> "$TRANSACTION_DIR/local-files.present"
+    done
+}
+
+begin_transaction() {
+    local path service active enabled account user_present group_present
+    local -a transaction_paths=("${TRANSACTION_PATHS[@]}")
+    TRANSACTION_DIR="$OUTPUT_DIR/.unbound-installer-rollback"
+
+    if [[ -f "$TRANSACTION_DIR/active" ]]; then
+        warn 'Ditemukan transaksi lama yang belum selesai; pemulihan akan dicoba sebelum melanjutkan.'
+        TRANSACTION_ACTIVE='yes'
+        rollback_transaction || return 1
+    elif [[ -e "$TRANSACTION_DIR" || -L "$TRANSACTION_DIR" ]]; then
+        run_as_root rm -rf -- "$TRANSACTION_DIR" || return 1
+    fi
+
+    mkdir -m 700 -p -- "$TRANSACTION_DIR/files" "$TRANSACTION_DIR/local-files" || return 1
+    shopt -s nullglob
+    transaction_paths+=(/etc/resolv.conf.bak.*)
+    shopt -u nullglob
+    if ! dpkg-query -W -f='${binary:Package}\t${db:Status-Abbrev}\n' 2>/dev/null |
+        awk -F '\t' '$2 ~ /^ii/ { print $1 }' | sort -u > "$TRANSACTION_DIR/packages.before"; then
+        error 'Tidak dapat menyimpan daftar paket sebelum instalasi.'
+        return 1
+    fi
+    : > "$TRANSACTION_DIR/paths.present"
+    : > "$TRANSACTION_DIR/paths.absent"
+    for path in "${transaction_paths[@]}"; do
+        if run_as_root test -e "$path" || run_as_root test -L "$path"; then
+            printf '%s\n' "$path" >> "$TRANSACTION_DIR/paths.present"
+            run_as_root cp -a --parents -- "$path" "$TRANSACTION_DIR/files" || {
+                error "Gagal menyimpan kondisi awal $path."
+                return 1
+            }
+        else
+            printf '%s\n' "$path" >> "$TRANSACTION_DIR/paths.absent"
+        fi
+    done
+
+    : > "$TRANSACTION_DIR/services.before"
+    for service in "${TRANSACTION_SERVICES[@]}"; do
+        active='no'
+        run_as_root systemctl is-active --quiet "$service" >/dev/null 2>&1 && active='yes'
+        enabled="$(run_as_root systemctl is-enabled "$service" 2>/dev/null || true)"
+        [[ -n "$enabled" ]] || enabled='not-found'
+        printf '%s %s %s\n' "$service" "$active" "$enabled" >> "$TRANSACTION_DIR/services.before"
+    done
+
+    if has_system_command ufw && run_as_root ufw status 2>/dev/null | grep -q '^Status: active'; then
+        printf 'yes\n' > "$TRANSACTION_DIR/ufw-active.before"
+    else
+        printf 'no\n' > "$TRANSACTION_DIR/ufw-active.before"
+    fi
+
+    : > "$TRANSACTION_DIR/accounts.before"
+    for account in unbound zabbix; do
+        user_present='no'
+        group_present='no'
+        getent passwd "$account" >/dev/null 2>&1 && user_present='yes'
+        getent group "$account" >/dev/null 2>&1 && group_present='yes'
+        printf '%s %s %s\n' "$account" "$user_present" "$group_present" >> "$TRANSACTION_DIR/accounts.before"
+    done
+    snapshot_local_outputs || { error 'Gagal menyimpan file lokal sebelum instalasi.'; return 1; }
+    : > "$TRANSACTION_DIR/active"
+    TRANSACTION_ACTIVE='yes'
+    info 'Snapshot rollback siap; paket dan konfigurasi awal tersimpan.'
+}
+
+restore_transaction_files() {
+    local path snapshot_path pattern
+    while IFS= read -r path; do
+        [[ -n "$path" ]] || continue
+        run_as_root rm -rf -- "$path" || ROLLBACK_FAILED='yes'
+    done < "$TRANSACTION_DIR/paths.absent"
+
+    find /etc -maxdepth 1 \( -type f -o -type l \) -name 'resolv.conf.bak.*' -delete 2>/dev/null || ROLLBACK_FAILED='yes'
+
+    while IFS= read -r path; do
+        [[ -n "$path" ]] || continue
+        snapshot_path="$TRANSACTION_DIR/files/${path#/}"
+        run_as_root rm -rf -- "$path" || ROLLBACK_FAILED='yes'
+        run_as_root cp -a -- "$snapshot_path" "$path" || ROLLBACK_FAILED='yes'
+    done < "$TRANSACTION_DIR/paths.present"
+
+    for pattern in \
+        unbound.conf 'unbound.conf.bak.*' \
+        blocklist-sources.json 'blocklist-sources.json.bak.*' \
+        zabbix_agentd.conf 'zabbix_agentd.conf.bak.*'; do
+        find "$OUTPUT_DIR" -maxdepth 1 \( -type f -o -type l \) -name "$pattern" -delete 2>/dev/null || ROLLBACK_FAILED='yes'
+    done
+    if [[ -d "$TRANSACTION_DIR/local-files" ]]; then
+        cp -a -- "$TRANSACTION_DIR/local-files/." "$OUTPUT_DIR/" || ROLLBACK_FAILED='yes'
+    fi
+}
+
+restore_transaction_accounts() {
+    local account user_present group_present
+    while read -r account user_present group_present; do
+        [[ -n "$account" ]] || continue
+        if [[ "$user_present" == no ]] && getent passwd "$account" >/dev/null 2>&1; then
+            if ! run_as_root userdel -r "$account" >/dev/null 2>&1; then
+                warn "Akun sistem baru '$account' tidak berhasil dihapus otomatis."
+                ROLLBACK_FAILED='yes'
+            fi
+        fi
+        if [[ "$group_present" == no ]] && getent group "$account" >/dev/null 2>&1; then
+            if ! run_as_root groupdel "$account" >/dev/null 2>&1; then
+                warn "Grup sistem baru '$account' tidak berhasil dihapus otomatis."
+                ROLLBACK_FAILED='yes'
+            fi
+        fi
+    done < "$TRANSACTION_DIR/accounts.before"
+}
+
+restore_transaction_services() {
+    local service active enabled ufw_before
+    run_as_root systemctl daemon-reload >/dev/null 2>&1 || ROLLBACK_FAILED='yes'
+    while read -r service active enabled; do
+        [[ -n "$service" ]] || continue
+        if ! run_as_root systemctl cat "$service" >/dev/null 2>&1; then continue; fi
+        case "$enabled" in
+            enabled) run_as_root systemctl enable "$service" >/dev/null 2>&1 || ROLLBACK_FAILED='yes' ;;
+            masked) run_as_root systemctl mask "$service" >/dev/null 2>&1 || ROLLBACK_FAILED='yes' ;;
+            *) run_as_root systemctl disable "$service" >/dev/null 2>&1 || true ;;
+        esac
+        if [[ "$active" == yes ]]; then
+            run_as_root systemctl start "$service" >/dev/null 2>&1 || ROLLBACK_FAILED='yes'
+        else
+            run_as_root systemctl stop "$service" >/dev/null 2>&1 || true
+        fi
+    done < "$TRANSACTION_DIR/services.before"
+
+    if has_system_command ufw; then
+        read -r ufw_before < "$TRANSACTION_DIR/ufw-active.before"
+        if [[ "$ufw_before" == yes ]]; then
+            run_as_root ufw --force enable >/dev/null 2>&1 || ROLLBACK_FAILED='yes'
+        else
+            run_as_root ufw --force disable >/dev/null 2>&1 || true
+        fi
+    fi
+}
+
+rollback_transaction() {
+    local after_file new_file
+    local -a new_packages=()
+    ROLLBACK_FAILED='no'
+    if [[ ! -f "$TRANSACTION_DIR/active" ]]; then
+        TRANSACTION_ACTIVE='no'
+        return 0
+    fi
+
+    info 'Terjadi kegagalan atau proses dibatalkan; memulihkan perubahan percobaan ini.'
+    if has_system_command ufw && run_as_root ufw status 2>/dev/null | grep -q '^Status: active'; then
+        run_as_root ufw --force disable >/dev/null 2>&1 || ROLLBACK_FAILED='yes'
+    fi
+
+    after_file="$TRANSACTION_DIR/packages.after"
+    new_file="$TRANSACTION_DIR/packages.new"
+    if dpkg-query -W -f='${binary:Package}\t${db:Status-Abbrev}\n' 2>/dev/null |
+        awk -F '\t' '$2 ~ /^i/ || $2 ~ /^rc/ { print $1 }' | sort -u > "$after_file" &&
+        comm -13 "$TRANSACTION_DIR/packages.before" "$after_file" > "$new_file"; then
+        mapfile -t new_packages < "$new_file"
+        if ((${#new_packages[@]})); then
+            printf 'Menghapus paket yang dipasang oleh percobaan ini: %s\n' "${new_packages[*]}"
+            run_as_root apt-get purge -y "${new_packages[@]}" || ROLLBACK_FAILED='yes'
+        fi
+    else
+        error 'Daftar paket setelah instalasi tidak dapat diperiksa.'
+        ROLLBACK_FAILED='yes'
+    fi
+
+    restore_transaction_accounts
+    restore_transaction_files
+    restore_transaction_services
+
+    if [[ "$ROLLBACK_FAILED" == no ]]; then
+        info 'Rollback selesai. Paket baru, file sistem, resolver, firewall, dan status service telah dikembalikan.'
+        run_as_root rm -rf -- "$TRANSACTION_DIR" || ROLLBACK_FAILED='yes'
+        TRANSACTION_ACTIVE='no'
+    else
+        error "Rollback belum tuntas. Data pemulihan disimpan di $TRANSACTION_DIR untuk dicoba ulang saat installer dijalankan kembali."
+    fi
+    [[ "$ROLLBACK_FAILED" == no ]]
 }
 
 enable_official_zabbix_repository() {
@@ -105,8 +354,6 @@ install_dependencies() {
             error 'sudo belum tersedia dan pengguna saat ini bukan root. Jalankan sekali sebagai root agar sudo dapat dipasang.'
             return 1
         fi
-        info 'Memvalidasi hak sudo sebelum memeriksa dependensi...'
-        sudo -v || { error 'Hak sudo tidak tersedia. Jalankan sebagai root atau pengguna sudo.'; return 1; }
     fi
     if has_system_command zabbix_agentd; then
         zabbix_was_installed=yes
@@ -766,7 +1013,9 @@ EOF
         cat <<'EOF'
     port: 53
     do-ip4: yes
-    do-ip6: $IPV6_ENABLED
+EOF
+        printf '    do-ip6: %s\n' "$IPV6_ENABLED"
+        cat <<'EOF'
     prefer-ip6: no
     do-udp: yes
     do-tcp: yes
@@ -1122,7 +1371,9 @@ main() {
     printf 'Tahap 1: validasi OS dan resource minimum host sebelum perubahan dilakukan.\n'
     check_supported_os
     check_minimum_host
-    printf '\nTahap 2: perbarui indeks APT, lalu periksa dan pasang dependensi wajib (Unbound, Python 3, curl, git, UFW, dnsutils, sudo, Zabbix Agent, dan root hints).\n'
+    check_root_access
+    begin_transaction
+    printf '\nTahap 2: perbarui indeks APT, lalu periksa dan pasang dependensi wajib (Unbound, unbound-anchor, Python 3, curl, git, UFW, dnsutils, sudo, Zabbix Agent, dan root hints).\n'
     install_dependencies
 
     while true; do
@@ -1159,6 +1410,7 @@ main() {
         printf 'Service Unbound aktif; DNS dan DNSSEC telah diperiksa.\n'
         if [[ "$USE_BLOCKLIST" == yes ]]; then printf 'Blocklist/whitelist aktif dan pembaruan terjadwal harian.\n'; fi
         if [[ "$USE_ZABBIX" == yes ]]; then printf 'Zabbix agent aktif dengan item custom unbound.stat[*].\n'; fi
+        INSTALL_COMPLETE='yes'
         break
     done
 }

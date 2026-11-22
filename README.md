@@ -53,6 +53,8 @@ Jalankan `git clone` dan installer sebagai akun yang memiliki hak sudo, atau lan
 
 Jika validasi konfigurasi atau pemeriksaan DNS gagal, installer melaporkan masalah dan memulihkan konfigurasi Unbound sebelumnya bila tersedia.
 
+Jika proses gagal atau menu dibatalkan, installer menghapus paket yang baru dipasang pada percobaan itu dan memulihkan file sistem, resolver, firewall, serta status service seperti sebelum dijalankan. Paket yang sudah ada sebelumnya tidak dihapus. Jika perangkat mati sebelum rollback selesai, data pemulihan disimpan dan dicoba kembali saat installer dijalankan lagi.
+
 ## Resolver setelah pemasangan
 
 **Virtual machine:** setelah semua pemeriksaan berhasil, installer mengatur `/etc/resolv.conf` ke `127.0.0.1`, menguji query host, dan menyimpan cadangan resolver sebelumnya.
