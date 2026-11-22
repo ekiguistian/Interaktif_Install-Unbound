@@ -26,6 +26,12 @@ info() { printf '\n%s\n' "$*"; }
 warn() { printf 'PERINGATAN: %s\n' "$*" >&2; }
 error() { printf 'ERROR: %s\n' "$*" >&2; }
 
+has_system_command() {
+    local name="$1"
+    command -v "$name" >/dev/null 2>&1 ||
+        [[ -x "/usr/sbin/$name" || -x "/usr/bin/$name" ]]
+}
+
 run_as_root() {
     if (( EUID == 0 )); then
         "$@"
@@ -102,7 +108,7 @@ install_dependencies() {
         info 'Memvalidasi hak sudo sebelum memeriksa dependensi...'
         sudo -v || { error 'Hak sudo tidak tersedia. Jalankan sebagai root atau pengguna sudo.'; return 1; }
     fi
-    if command -v zabbix_agentd >/dev/null 2>&1 || [[ -x /usr/sbin/zabbix_agentd ]]; then
+    if has_system_command zabbix_agentd; then
         zabbix_was_installed=yes
     fi
 
@@ -129,16 +135,15 @@ install_dependencies() {
         return 1
     fi
 
-    if ! command -v unbound-checkconf >/dev/null 2>&1 ||
-        ! command -v unbound-anchor >/dev/null 2>&1 ||
-        ! command -v unbound-control-setup >/dev/null 2>&1; then missing+=(unbound); fi
+    if ! has_system_command unbound-checkconf || ! has_system_command unbound-control-setup; then missing+=(unbound); fi
+    has_system_command unbound-anchor || missing+=(unbound-anchor)
     command -v python3 >/dev/null 2>&1 || missing+=(python3)
-    command -v ufw >/dev/null 2>&1 || missing+=(ufw)
-    command -v dig >/dev/null 2>&1 || missing+=(dnsutils)
+    has_system_command ufw || missing+=(ufw)
+    has_system_command dig || missing+=(dnsutils)
     command -v sudo >/dev/null 2>&1 || missing+=(sudo)
     command -v git >/dev/null 2>&1 || missing+=(git)
     command -v curl >/dev/null 2>&1 || missing+=(curl)
-    [[ -x /usr/sbin/zabbix_agentd ]] || command -v zabbix_agentd >/dev/null 2>&1 || missing+=(zabbix-agent)
+    has_system_command zabbix_agentd || missing+=(zabbix-agent)
     [[ -s /usr/share/dns/root.hints || -s /usr/share/unbound/root.hints ]] || missing+=(dns-root-data)
 
     if ((${#missing[@]})); then
@@ -148,16 +153,16 @@ install_dependencies() {
         info 'Semua dependensi wajib sudah tersedia.'
     fi
 
-    command -v unbound-checkconf >/dev/null 2>&1 || { error 'Unbound belum berhasil dipasang.'; return 1; }
-    command -v unbound-anchor >/dev/null 2>&1 || { error 'unbound-anchor belum tersedia.'; return 1; }
-    command -v unbound-control-setup >/dev/null 2>&1 || { error 'unbound-control-setup belum tersedia.'; return 1; }
+    has_system_command unbound-checkconf || { error 'Unbound belum berhasil dipasang.'; return 1; }
+    has_system_command unbound-anchor || { error 'Paket unbound-anchor belum berhasil dipasang.'; return 1; }
+    has_system_command unbound-control-setup || { error 'unbound-control-setup belum tersedia.'; return 1; }
     command -v python3 >/dev/null 2>&1 || { error 'Python 3 belum berhasil dipasang.'; return 1; }
-    command -v ufw >/dev/null 2>&1 || { error 'UFW belum berhasil dipasang.'; return 1; }
-    command -v dig >/dev/null 2>&1 || { error 'dig dari paket dnsutils belum tersedia.'; return 1; }
+    has_system_command ufw || { error 'UFW belum berhasil dipasang.'; return 1; }
+    has_system_command dig || { error 'dig dari paket dnsutils belum tersedia.'; return 1; }
     command -v sudo >/dev/null 2>&1 || { error 'sudo belum berhasil dipasang.'; return 1; }
     command -v git >/dev/null 2>&1 || { error 'git belum berhasil dipasang.'; return 1; }
     command -v curl >/dev/null 2>&1 || { error 'curl belum berhasil dipasang.'; return 1; }
-    [[ -x /usr/sbin/zabbix_agentd || $(command -v zabbix_agentd 2>/dev/null || true) ]] || { error 'Zabbix Agent belum berhasil dipasang.'; return 1; }
+    has_system_command zabbix_agentd || { error 'Zabbix Agent belum berhasil dipasang.'; return 1; }
     [[ -s /usr/share/dns/root.hints || -s /usr/share/unbound/root.hints ]] || { error 'File root hints dari dns-root-data tidak ditemukan.'; return 1; }
 
     # A newly installed agent must not run with its package-default localhost settings.

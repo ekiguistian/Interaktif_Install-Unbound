@@ -44,7 +44,7 @@ Jalankan `git clone` dan installer sebagai akun yang memiliki hak sudo, atau lan
 
 1. Memeriksa versi OS, CPU, RAM, dan ruang kosong di `/var`. Host di bawah minimum akan dihentikan sebelum perubahan dilakukan.
 2. Menjalankan `apt-get update`.
-3. Memeriksa lalu memasang dependensi wajib: Unbound, Python 3, curl, Git, UFW, dnsutils, sudo, Zabbix Agent, dan root hints. Repository resmi Zabbix ditambahkan jika paket Agent tidak tersedia di APT distro.
+3. Memeriksa lalu memasang dependensi wajib: Unbound, paket `unbound-anchor`, Python 3, curl, Git, UFW, dnsutils, sudo, Zabbix Agent, dan root hints. Repository resmi Zabbix ditambahkan jika paket Agent tidak tersedia di APT distro.
 4. Meminta jenis server, alamat interface, jaringan yang boleh mengakses DNS, resource, PTR, upstream, logging, blocklist/whitelist, Zabbix, dan aturan SSH.
 5. Menampilkan ringkasan untuk diperiksa sebelum konfigurasi diterapkan.
 6. Membuat konfigurasi, memvalidasi dengan `unbound-checkconf`, memasang Unbound, dan mengatur UFW.
