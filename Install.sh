@@ -4,6 +4,7 @@ set -Eeuo pipefail
 APP_NAME='Instalasi Unbound DNS Server Interaktif'
 OUTPUT_DIR="$(pwd)"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/src/terminal_ui.bash"
 CONF_TMP=''
 BLOCKLIST_CONF_BACKUP=''
 BLOCKLIST_SOURCES_BACKUP=''
@@ -60,9 +61,10 @@ on_exit() {
 trap on_error ERR
 trap 'on_exit $?' EXIT
 
-info() { printf '\n%s\n' "$*"; }
-warn() { printf 'PERINGATAN: %s\n' "$*" >&2; }
-error() { printf 'ERROR: %s\n' "$*" >&2; }
+info() { ui_info "$@"; }
+process() { ui_process "$@"; }
+warn() { ui_warn "$@"; }
+error() { ui_error "$@"; }
 
 has_system_command() {
     local name="$1"
@@ -88,7 +90,7 @@ dependency_available() {
 
 show_dependency_status() {
     local dependency
-    printf '\nStatus dependensi wajib:\n'
+    process 'Status dependensi wajib:'
     for dependency in unbound unbound-anchor python3 curl git ufw dnsutils sudo zabbix-agent dns-root-data; do
         if dependency_available "$dependency"; then
             printf '  %-16s tersedia\n' "$dependency"
@@ -124,15 +126,33 @@ refresh_apt_indexes() {
         error 'Package manager APT tidak ditemukan. Installer ini ditujukan untuk Ubuntu dan Debian.'
         return 1
     fi
+    local log_file
+    log_file="$(mktemp "${TMPDIR:-/tmp}/unbound-apt-update.XXXXXX")"
     info 'Memperbarui indeks paket APT...'
-    run_as_root apt-get update
+    if ui_run_with_spinner 'Memperbarui indeks APT' "$log_file" tail run_as_root apt-get update; then
+        rm -f -- "$log_file"
+    else
+        local status=$?
+        rm -f -- "$log_file"
+        return "$status"
+    fi
+    rm -f -- "$log_file"
     APT_INDEX_UPDATED='yes'
 }
 
 install_packages() {
     local packages=("$@")
+    local log_file
     if [[ "$APT_INDEX_UPDATED" != yes ]]; then refresh_apt_indexes; fi
-    run_as_root apt-get install -y --no-upgrade "${packages[@]}"
+    log_file="$(mktemp "${TMPDIR:-/tmp}/unbound-apt-install.XXXXXX")"
+    if ui_run_with_spinner "Memasang paket: ${packages[*]}" "$log_file" tail \
+        run_as_root apt-get install -y --no-upgrade "${packages[@]}"; then
+        rm -f -- "$log_file"
+    else
+        local status=$?
+        rm -f -- "$log_file"
+        return "$status"
+    fi
 }
 
 snapshot_local_outputs() {
@@ -505,7 +525,7 @@ check_supported_os() {
             exit 1
             ;;
     esac
-    printf 'OS terdeteksi: %s %s\n' "$PRETTY_NAME" "$os_version"
+    info "OS terdeteksi: $PRETTY_NAME $os_version"
 }
 
 check_minimum_host() {
@@ -520,8 +540,7 @@ check_minimum_host() {
     fi
     memory_mb=$((memory_kb / 1024))
 
-    printf 'Resource host terdeteksi: CPU %s core, RAM %s MB, ruang kosong /var %s MB.\n' \
-        "$cpu_count" "$memory_mb" "$((var_free_kb / 1024))"
+    info "Resource host terdeteksi: CPU $cpu_count core, RAM $memory_mb MB, ruang kosong /var $((var_free_kb / 1024)) MB."
 
     if (( cpu_count < 1 || memory_mb < 512 || var_free_kb < minimum_disk_kb )); then
         error 'Spesifikasi sistem di bawah minimum. Perbarui terlebih dahulu: minimal 1 CPU, RAM 512 MB, dan ruang kosong 1 GB pada /var.'
@@ -533,7 +552,7 @@ ask_choice() {
     local prompt="$1"; shift
     local allowed=("$@") answer choice
     while true; do
-        read -r -p "$prompt " answer
+        read -r -p "${UI_BLUE}${prompt} ${UI_RESET}" answer
         for choice in "${allowed[@]}"; do
             [[ "$answer" == "$choice" ]] && { printf '%s' "$answer"; return; }
         done
@@ -543,7 +562,7 @@ ask_choice() {
 
 ask_default() {
     local prompt="$1" default="$2" answer
-    read -r -p "$prompt [default: $default]: " answer
+    read -r -p "${UI_BLUE}${prompt} [default: $default]: ${UI_RESET}" answer
     printf '%s' "${answer:-$default}"
 }
 
@@ -551,10 +570,10 @@ ask_integer() {
     local prompt="$1" minimum="$2" maximum="$3" default="${4:-}" answer number
     while true; do
         if [[ -n "$default" ]]; then
-            read -r -p "$prompt [$default]: " answer
+            read -r -p "${UI_BLUE}${prompt} [$default]: ${UI_RESET}" answer
             answer="${answer:-$default}"
         else
-            read -r -p "$prompt: " answer
+            read -r -p "${UI_BLUE}${prompt}: ${UI_RESET}" answer
         fi
         if [[ "$answer" =~ ^[0-9]+$ ]]; then
             number=$((10#$answer))
@@ -670,7 +689,7 @@ ask_upstreams() {
             if [[ -n "$default_ip" ]]; then
                 answer="$(ask_default "IP upstream #$((index + 1))" "$default_ip")"
             else
-                read -r -p "IP upstream #$((index + 1)): " answer
+                read -r -p "${UI_BLUE}IP upstream #$((index + 1)): ${UI_RESET}" answer
             fi
             if valid_ip "$answer"; then
                 UPSTREAM_IPS+=("$answer")
@@ -689,7 +708,7 @@ ask_urls() {
     count="$(ask_integer "Jumlah link sumber $label" 1 100)"
     for ((index=1; index<=count; index++)); do
         while true; do
-            read -r -p "Link $label #$index (https://): " url
+            read -r -p "${UI_BLUE}Link $label #$index (https://): ${UI_RESET}" url
             if [[ "$url" =~ ^https://[^[:space:]]+$ ]]; then
                 target_array+=("$url")
                 break
@@ -702,7 +721,7 @@ ask_urls() {
 ensure_ipv4() {
     local answer
     while true; do
-        read -r -p "$1: " answer
+        read -r -p "${UI_BLUE}$1: ${UI_RESET}" answer
         if valid_ipv4 "$answer"; then
             printf '%s' "$answer"
             return
@@ -717,7 +736,7 @@ ask_zabbix() {
     if [[ "$answer" == 1 ]]; then
         USE_ZABBIX='yes'
         while true; do
-            read -r -p 'Hostname agent Zabbix: ' ZABBIX_HOSTNAME
+            read -r -p "${UI_BLUE}Hostname agent Zabbix: ${UI_RESET}" ZABBIX_HOSTNAME
             if [[ "$ZABBIX_HOSTNAME" =~ ^[A-Za-z0-9._-]{1,128}$ ]]; then break; fi
             printf 'Hostname hanya boleh berisi huruf, angka, titik, garis bawah, dan strip.\n' >&2
         done
@@ -818,7 +837,7 @@ collect_specification() {
 
     SSH_SOURCE=''
     while true; do
-        read -r -p 'Sumber IP/CIDR untuk SSH (kosong = izinkan dari mana saja): ' SSH_SOURCE
+        read -r -p "${UI_BLUE}Sumber IP/CIDR untuk SSH (kosong = izinkan dari mana saja): ${UI_RESET}" SSH_SOURCE
         if [[ -z "$SSH_SOURCE" ]] || valid_ip_or_cidr "$SSH_SOURCE"; then break; fi
         printf 'Alamat IP/CIDR sumber tidak valid.\n' >&2
     done
@@ -1419,20 +1438,20 @@ show_proxmox_dns_recommendation() {
 
 main() {
     local main_choice review_choice
-    printf '============================================================\n'
-    printf ' %s\n' "$APP_NAME"
-    printf '============================================================\n'
-    printf 'Tahap 1: validasi OS dan resource minimum host sebelum perubahan dilakukan.\n'
+    ui_init
+    ui_header "$APP_NAME"
+    process 'Tahap 1: validasi OS dan resource minimum host sebelum perubahan dilakukan.'
     check_supported_os
     check_minimum_host
     check_root_access
     begin_transaction
-    printf '\nTahap 2: periksa dependensi wajib. APT hanya diperbarui jika ada dependensi yang belum tersedia.\n'
+    process 'Tahap 2: periksa dependensi wajib. APT hanya diperbarui jika ada dependensi yang belum tersedia.'
     install_dependencies
     check_existing_unbound_configuration
 
     while true; do
-        printf '\nMENU UTAMA\n  1. Generate / Perbaiki unbound.conf\n  2. Batal - Keluar\n'
+        ui_process 'MENU UTAMA'
+        printf '  1. Generate / Perbaiki unbound.conf\n  2. Batal - Keluar\n'
         main_choice="$(ask_choice 'Pilih menu (1-2)' 1 2)"
         [[ "$main_choice" == 2 ]] && { printf 'Aplikasi ditutup.\n'; return; }
 

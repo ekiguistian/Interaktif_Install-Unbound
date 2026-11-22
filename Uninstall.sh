@@ -3,14 +3,16 @@ set -uo pipefail
 
 APP_NAME='Uninstalasi Interaktif - Clear OS'
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/src/terminal_ui.bash"
 FAILED_STEPS=()
 FALLBACK_DNS=()
 RESOLV_BACKUP=''
 UFW_DEFAULT_BACKUP=''
 
-info() { printf '\n%s\n' "$*"; }
-warn() { printf 'PERINGATAN: %s\n' "$*" >&2; }
-error() { printf 'ERROR: %s\n' "$*" >&2; }
+info() { ui_info "$@"; }
+process() { ui_process "$@"; }
+warn() { ui_warn "$@"; }
+error() { ui_error "$@"; }
 
 run_root() {
     if (( EUID == 0 )); then
@@ -22,12 +24,12 @@ run_root() {
 
 run_step() {
     local label="$1"; shift
-    printf '\n[Tahap] %s\n' "$label"
+    process "Tahap: $label"
     if "$@"; then
-        printf '[OK] %s\n' "$label"
+        info "Selesai: $label"
     else
         local status=$?
-        printf '[GAGAL, exit %s] %s\n' "$status" "$label" >&2
+        printf '%s[GAGAL, exit %s] %s%s\n' "$UI_RED" "$status" "$label" "$UI_RESET" >&2
         FAILED_STEPS+=("$label")
         return "$status"
     fi
@@ -67,8 +69,7 @@ read_fallback_dns() {
     local input address
     local -a addresses=()
     while true; do
-        printf 'Masukkan DNS IPv4 pengganti, pisahkan dengan koma (contoh 192.168.1.1,192.168.1.2): '
-        IFS= read -r input || return 1
+        IFS= read -r -p "${UI_BLUE}Masukkan DNS IPv4 pengganti, pisahkan dengan koma (contoh 192.168.1.1,192.168.1.2): ${UI_RESET}" input || return 1
         addresses=()
         IFS=',' read -r -a addresses <<< "$input"
         ((${#addresses[@]})) || { warn 'Masukkan minimal satu alamat IPv4.'; continue; }
@@ -146,8 +147,17 @@ purge_stack_packages() {
         printf 'Paket Unbound/Zabbix yang dikelola tidak ditemukan.\n'
         return 0
     fi
+    local log_file status
     printf 'Paket yang akan di-purge: %s\n' "${packages[*]}"
-    run_root apt-get purge -y -- "${packages[@]}"
+    log_file="$(mktemp "${TMPDIR:-/tmp}/unbound-apt-purge.XXXXXX")"
+    if ui_run_with_spinner 'Menghapus paket layanan DNS dan monitoring' "$log_file" tail \
+        run_root apt-get purge -y -- "${packages[@]}"; then
+        status=0
+    else
+        status=$?
+    fi
+    rm -f -- "$log_file"
+    return "$status"
 }
 
 reset_ufw() {
@@ -232,36 +242,42 @@ show_package_status() {
     for package in unbound unbound-anchor zabbix-agent dns-root-data dnsperf; do
         status="$(dpkg-query -W -f='${db:Status-Status}' "$package" 2>/dev/null || true)"
         [[ -n "$status" ]] || status='tidak terpasang'
-        printf '  %-16s %s\n' "$package" "$status"
+        if [[ "$status" == installed ]]; then
+            printf '  %-16s %s%s%s\n' "$package" "$UI_RED" "$status" "$UI_RESET"
+        else
+            printf '  %-16s %s%s%s\n' "$package" "$UI_GREEN" "$status" "$UI_RESET"
+        fi
     done
 }
 
 show_system_result() {
     local service path
-    printf '\n============================================================\n'
-    printf ' HASIL SISTEM SETELAH UNINSTALL\n'
-    printf '============================================================\n'
+    ui_process 'HASIL SISTEM SETELAH UNINSTALL'
     if [[ -r /etc/os-release ]]; then
         . /etc/os-release
-        printf 'OS                : %s\n' "${PRETTY_NAME:-tidak diketahui}"
+        printf 'OS                : %s%s%s\n' "$UI_GREEN" "${PRETTY_NAME:-tidak diketahui}" "$UI_RESET"
     fi
-    printf 'Paket layanan     :\n'
+    printf '%sPaket layanan:%s\n' "$UI_BLUE" "$UI_RESET"
     show_package_status
     for service in unbound unbound-resolvconf.service zabbix-agent unbound-blocklist-update.timer; do
         if systemctl is-active --quiet "$service" 2>/dev/null; then
-            printf 'Service %-27s aktif\n' "$service"
+            printf 'Service %-27s %saktif%s\n' "$service" "$UI_RED" "$UI_RESET"
         else
-            printf 'Service %-27s tidak aktif\n' "$service"
+            printf 'Service %-27s %stidak aktif%s\n' "$service" "$UI_GREEN" "$UI_RESET"
         fi
     done
-    printf 'File konfigurasi :\n'
+    printf '%sFile konfigurasi:%s\n' "$UI_BLUE" "$UI_RESET"
     for path in /etc/unbound /var/lib/unbound /var/cache/unbound /var/log/unbound-localzone.log \
         /etc/zabbix/zabbix_agentd.conf /etc/sudoers.d/unbound-zabbix \
         /usr/local/bin/autoupdate-blocklist.py /usr/local/bin/domain-blocklist.txt \
         /usr/local/bin/last-temp-final.txt /usr/local/bin/last-verified-whitelist.txt \
         /etc/systemd/system/unbound-blocklist-update.service \
         /etc/systemd/system/unbound-blocklist-update.timer "$SCRIPT_DIR/dnsperf-results"; do
-        if [[ -e "$path" || -L "$path" ]]; then printf '  MASIH ADA  %s\n' "$path"; else printf '  TERHAPUS   %s\n' "$path"; fi
+        if [[ -e "$path" || -L "$path" ]]; then
+            printf '  %sMASIH ADA%s  %s\n' "$UI_RED" "$UI_RESET" "$path"
+        else
+            printf '  %sTERHAPUS%s   %s\n' "$UI_GREEN" "$UI_RESET" "$path"
+        fi
     done
     if command -v ufw >/dev/null 2>&1; then
         printf 'Firewall UFW      : '
@@ -273,19 +289,25 @@ show_system_result() {
     if [[ -r /etc/resolv.conf ]]; then sed -n '/^[[:space:]]*nameserver[[:space:]]/p' /etc/resolv.conf; else printf '  /etc/resolv.conf tidak dapat dibaca\n'; fi
     if command -v getent >/dev/null 2>&1; then
         printf 'Tes DNS            : '
-        if getent ahosts cloudflare.com >/dev/null 2>&1; then printf 'berhasil resolve cloudflare.com\n'; else printf 'belum berhasil resolve cloudflare.com\n'; fi
+        if getent ahosts cloudflare.com >/dev/null 2>&1; then
+            printf '%sberhasil resolve cloudflare.com%s\n' "$UI_GREEN" "$UI_RESET"
+        else
+            printf '%sbelum berhasil resolve cloudflare.com%s\n' "$UI_RED" "$UI_RESET"
+        fi
     fi
     printf 'Dependensi umum    : sudo, Python 3, curl, Git, dnsutils, dan UFW dipertahankan.\n'
     if ((${#FAILED_STEPS[@]})); then
         printf '\nTahap yang gagal:\n'
         printf '  - %s\n' "${FAILED_STEPS[@]}"
     else
-        printf '\nSemua tahap uninstall selesai.\n'
+        info 'Semua tahap uninstall selesai.'
     fi
 }
 
 main() {
     local confirmation
+    ui_init
+    ui_header "$APP_NAME"
     if (( EUID != 0 )); then
         if ! command -v sudo >/dev/null 2>&1; then
             error 'Jalankan sebagai root. sudo tidak tersedia.'
@@ -299,10 +321,7 @@ main() {
     fi
 
     discover_backups
-    printf '============================================================\n'
-    printf ' %s\n' "$APP_NAME"
-    printf '============================================================\n'
-    printf 'Script akan menjalankan tahapan berikut secara berurutan:\n'
+    process 'Script akan menjalankan tahapan berikut secara berurutan:'
     printf '  1. Menghentikan Unbound, Zabbix Agent, dan timer blocklist.\n'
     printf '  2. Memulihkan resolver lama dari cadangan, bila tersedia.\n'
     printf '  3. Menonaktifkan dan mereset aturan UFW.\n'
@@ -319,8 +338,7 @@ main() {
         printf 'Cadangan resolver tidak ditemukan; resolver yang tidak menunjuk localhost akan dibiarkan.\n'
     fi
     printf '\nAksi ini menghapus konfigurasi dan data Unbound secara permanen.\n'
-    printf 'Ketik HAPUS untuk melanjutkan, atau tekan Enter untuk batal: '
-    IFS= read -r confirmation || exit 1
+    IFS= read -r -p "${UI_BLUE}Ketik HAPUS untuk melanjutkan, atau tekan Enter untuk batal: ${UI_RESET}" confirmation || exit 1
     [[ "$confirmation" == HAPUS ]] || { printf 'Uninstall dibatalkan; sistem tidak diubah.\n'; exit 0; }
 
     if [[ -z "$RESOLV_BACKUP" ]] && uses_local_resolver; then

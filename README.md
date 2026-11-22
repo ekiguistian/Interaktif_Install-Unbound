@@ -12,6 +12,16 @@ Repository ini menyediakan tiga script:
 | `Uninstall.sh` | Uninstalasi Interaktif - Clear OS. Menghapus stack Unbound/Zabbix/dnsperf. UFW di-reset dan dinonaktifkan. |
 | `Tes.sh` | Pasang dnsperf bila belum tersedia lalu uji resolver lokal dengan 100 domain. |
 
+## Tampilan terminal
+
+Ketiga script membersihkan layar saat berjalan di terminal interaktif, lalu menampilkan nama OS, versi kernel, dan arsitektur server. Informasi berwarna hijau, proses berwarna biru, dan peringatan atau error berwarna merah. Proses yang lama menampilkan indikator jam pasir. Warna dan pembersihan layar tidak dipakai saat script berjalan tanpa terminal. Setel `NO_COLOR=1` untuk menonaktifkan warna tanpa mematikan indikator jam pasir atau pembersihan layar. File konfigurasi Unbound dan ringkasan hasil dnsperf tetap berupa teks biasa.
+
+## Alur penggunaan
+
+1. Jalankan `Install.sh` untuk memeriksa OS dan resource, memasang dependensi yang kurang, lalu mengatur resolver, firewall, blocklist/whitelist, dan Zabbix dari pilihan interaktif. Installer meminta konfirmasi ringkasan sebelum menerapkan konfigurasi dan menjalankan pemeriksaan DNS serta DNSSEC setelah pemasangan.
+2. Jalankan `Tes.sh` di server untuk memeriksa DNS lokal, memanaskan cache, lalu mengukur resolver dengan dnsperf. Hasil pengujian dan ringkasan disimpan di `dnsperf-results/`.
+3. Jika ingin menghapus stack yang dipasang, jalankan `Uninstall.sh`. Script menampilkan rencana penghapusan, meminta konfirmasi `HAPUS`, menjalankan tahap uninstall, lalu melaporkan hasil sistem.
+
 Lihat [SECURITY.md](SECURITY.md) sebelum memakai server yang bisa diakses dari Internet. Panduan perubahan kode ada di [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Sistem yang didukung

@@ -3,17 +3,32 @@ set -Eeuo pipefail
 
 APP_NAME='Uji Server Unbound dengan dnsperf'
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/src/terminal_ui.bash"
 DOMAIN_SOURCE="$SCRIPT_DIR/src/dnsperf-domains.txt"
 RESULT_DIR="$SCRIPT_DIR/dnsperf-results"
 SERVER_IP='127.0.0.1'
 SERVER_PORT=53
 
-info() { printf '\n%s\n' "$*"; }
-warn() { printf 'PERINGATAN: %s\n' "$*" >&2; }
-error() { printf 'ERROR: %s\n' "$*" >&2; }
+info() { ui_info "$@"; }
+process() { ui_process "$@"; }
+warn() { ui_warn "$@"; }
+error() { ui_error "$@"; }
 
 run_as_root() {
     if (( EUID == 0 )); then "$@"; else sudo "$@"; fi
+}
+
+run_apt_with_spinner() {
+    local label="$1" log_file status
+    shift
+    log_file="$(mktemp "${TMPDIR:-/tmp}/unbound-apt.XXXXXX")"
+    if ui_run_with_spinner "$label" "$log_file" tail run_as_root "$@"; then
+        status=0
+    else
+        status=$?
+    fi
+    rm -f -- "$log_file"
+    return "$status"
 }
 
 install_missing_packages() {
@@ -37,28 +52,35 @@ install_missing_packages() {
         sudo -v || { error 'Hak sudo tidak tersedia.'; return 1; }
     fi
     info "Dependensi yang belum tersedia: ${missing[*]}"
-    run_as_root apt-get update
+    run_apt_with_spinner 'Memperbarui indeks APT' apt-get update
     if [[ " ${missing[*]} " == *' dnsperf '* ]]; then
         [[ -r /etc/os-release ]] && . /etc/os-release
         os_id="${ID:-}"
         if [[ "$os_id" == ubuntu ]] && ! apt-cache show dnsperf >/dev/null 2>&1; then
             info 'Paket dnsperf belum terlihat di APT Ubuntu; mengaktifkan Universe.'
             if ! command -v add-apt-repository >/dev/null 2>&1; then
-                run_as_root apt-get install -y --no-upgrade software-properties-common
+                run_apt_with_spinner 'Memasang dukungan repository Ubuntu' apt-get install -y --no-upgrade software-properties-common
             fi
             command -v add-apt-repository >/dev/null 2>&1 || {
                 error 'add-apt-repository tidak tersedia untuk mengaktifkan Ubuntu Universe.'
                 return 1
             }
-            run_as_root add-apt-repository --yes universe
-            run_as_root apt-get update
+            local repository_log
+            repository_log="$(mktemp "${TMPDIR:-/tmp}/unbound-universe.XXXXXX")"
+            if ! ui_run_with_spinner 'Mengaktifkan repository Ubuntu Universe' "$repository_log" tail \
+                run_as_root add-apt-repository --yes universe; then
+                rm -f -- "$repository_log"
+                return 1
+            fi
+            rm -f -- "$repository_log"
+            run_apt_with_spinner 'Memperbarui indeks APT' apt-get update
         fi
         if ! apt-cache show dnsperf >/dev/null 2>&1; then
             error 'Paket dnsperf tidak tersedia pada repository APT yang aktif.'
             return 1
         fi
     fi
-    run_as_root apt-get install -y --no-upgrade "${missing[@]}"
+    run_apt_with_spinner "Memasang dependensi: ${missing[*]}" apt-get install -y --no-upgrade "${missing[@]}"
     command -v dig >/dev/null 2>&1 || { error 'dig belum tersedia setelah pemasangan dnsutils.'; return 1; }
     command -v dnsperf >/dev/null 2>&1 || { error 'dnsperf belum tersedia setelah pemasangan.'; return 1; }
 }
@@ -66,8 +88,7 @@ install_missing_packages() {
 ask_integer() {
     local prompt="$1" default="$2" minimum="$3" maximum="$4" value
     while true; do
-        printf '%s [%s]: ' "$prompt" "$default"
-        IFS= read -r value || return 1
+        IFS= read -r -p "${UI_BLUE}${prompt} [${default}]: ${UI_RESET}" value || return 1
         [[ -n "$value" ]] || value="$default"
         if [[ "$value" =~ ^[0-9]+$ ]] && ((value >= minimum && value <= maximum)); then
             printf '%s' "$value"
@@ -80,8 +101,7 @@ ask_integer() {
 ask_positive_integer() {
     local prompt="$1" default="$2" value
     while true; do
-        printf '%s [%s]: ' "$prompt" "$default"
-        IFS= read -r value || return 1
+        IFS= read -r -p "${UI_BLUE}${prompt} [${default}]: ${UI_RESET}" value || return 1
         [[ -n "$value" ]] || value="$default"
         if [[ "$value" =~ ^[1-9][0-9]*$ ]]; then
             printf '%s' "$value"
@@ -142,14 +162,13 @@ show_summary() {
 
 main() {
     local test_status=0 dns_output dnssec_output confirmation
-    printf '============================================================\n'
-    printf ' %s\n' "$APP_NAME"
-    printf '============================================================\n'
-    printf 'Pengujian berjalan dari server yang sama ke %s:%s.\n' "$SERVER_IP" "$SERVER_PORT"
-    printf 'Daftar query berisi 100 domain umum dengan tipe record A.\n'
+    ui_init
+    ui_header "$APP_NAME"
+    process "Pengujian berjalan dari server yang sama ke $SERVER_IP:$SERVER_PORT."
+    process 'Daftar query berisi 100 domain umum dengan tipe record A.'
     CPU_CORES="$(detect_cpu_cores)"
     printf 'Jumlah CPU terdeteksi: %s core. Nilai awal client dan thread mengikuti jumlah ini.\n' "$CPU_CORES"
-    printf 'Tahap 1: memeriksa dan memasang dnsperf/dig bila belum tersedia.\n'
+    process 'Tahap 1: memeriksa dan memasang dnsperf/dig bila belum tersedia.'
     install_missing_packages
 
     if [[ ! -r "$DOMAIN_SOURCE" ]]; then
@@ -175,11 +194,11 @@ main() {
         printf '%s\n' "$dns_output" >&2
         return 1
     fi
-    printf '\nPemeriksaan awal DNS: berhasil resolve cloudflare.com melalui %s.\n' "$SERVER_IP"
+    info "Pemeriksaan awal DNS: berhasil resolve cloudflare.com melalui $SERVER_IP."
 
     dnssec_output="$(dig +time=3 +tries=1 +dnssec @"$SERVER_IP" cloudflare.com A +noall +comments +answer 2>&1)" || true
     if grep -qiE 'flags:.*\bad\b' <<< "$dnssec_output"; then
-        printf 'Pemeriksaan DNSSEC: flag AD terlihat.\n'
+        info 'Pemeriksaan DNSSEC: flag AD terlihat.'
     else
         warn 'Flag AD tidak terlihat pada query DNSSEC. Periksa konfigurasi DNSSEC dan jawaban resolver.'
     fi
@@ -193,8 +212,7 @@ main() {
     SUMMARY_LOG="$RESULT_DIR/ringkasan-$stamp.txt"
     cp -- "$DOMAIN_SOURCE" "$query_file"
 
-    printf '\nPeringatan: dnsperf akan mengirim query tanpa batas QPS dari script.\n'
-    printf 'Client dan thread dapat memakai CPU server. DNS klien lain bisa melambat selama pengujian.\n'
+    warn 'dnsperf mengirim query tanpa batas QPS dari script. Client dan thread dapat memakai CPU server, sehingga DNS klien lain bisa melambat selama pengujian.'
     if grep -Eq '^[[:space:]]*log-(queries|replies):[[:space:]]*yes' /etc/unbound/unbound.conf 2>/dev/null; then
         warn 'Log query/reply aktif. Pencatatan log dapat menurunkan hasil benchmark; hasil ini mengukur konfigurasi yang sedang berjalan.'
     fi
@@ -203,23 +221,24 @@ main() {
     THREADS="$(ask_positive_integer 'Jumlah pasangan thread send/receive (tanpa batas dari script)' "$CPU_CORES")"
     printf '\nRencana uji: %s detik, %s client, %s pasangan thread, tanpa batas QPS dari script.\n' \
         "$DURATION" "$CLIENTS" "$THREADS"
-    printf 'Ketik MULAI untuk menjalankan, atau tekan Enter untuk batal: '
-    IFS= read -r confirmation || return 1
+    IFS= read -r -p "${UI_BLUE}Ketik MULAI untuk menjalankan, atau tekan Enter untuk batal: ${UI_RESET}" confirmation || return 1
     if [[ "$confirmation" != MULAI ]]; then
         printf 'Pengujian dibatalkan; Unbound tidak diubah.\n'
         return 0
     fi
 
-    printf '\nTahap 2: pemanasan cache menggunakan 100 domain satu kali.\n'
-    if ! dnsperf -f inet -s "$SERVER_IP" -p "$SERVER_PORT" -d "$query_file" \
-        -n 1 -c "$CLIENTS" -T "$THREADS" 2>&1 | tee "$WARMUP_LOG"; then
-        error 'Pemanasan cache gagal. Periksa output di atas.'
+    process 'Tahap 2: pemanasan cache menggunakan 100 domain satu kali.'
+    if ! ui_run_with_spinner 'Memanaskan cache DNS' "$WARMUP_LOG" full \
+        dnsperf -f inet -s "$SERVER_IP" -p "$SERVER_PORT" -d "$query_file" \
+            -n 1 -c "$CLIENTS" -T "$THREADS"; then
+        error 'Pemanasan cache gagal. Periksa log pemanasan.'
         return 1
     fi
 
-    printf '\nTahap 3: pengukuran dnsperf selama %s detik.\n' "$DURATION"
-    if dnsperf -f inet -s "$SERVER_IP" -p "$SERVER_PORT" -d "$query_file" \
-        -l "$DURATION" -c "$CLIENTS" -T "$THREADS" -S 2 2>&1 | tee "$RUN_LOG"; then
+    process "Tahap 3: pengukuran dnsperf selama $DURATION detik."
+    if ui_run_with_spinner 'Mengukur kapasitas resolver dengan dnsperf' "$RUN_LOG" full \
+        dnsperf -f inet -s "$SERVER_IP" -p "$SERVER_PORT" -d "$query_file" \
+            -l "$DURATION" -c "$CLIENTS" -T "$THREADS" -S 2; then
         test_status=0
     else
         test_status=$?
