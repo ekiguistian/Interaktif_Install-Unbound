@@ -1,0 +1,6 @@
+# Replace these placeholders before installing the agent configuration.
+PidFile=/run/zabbix/zabbix_agentd.pid
+LogType=system
+Server=ZABBIX_SERVER_IP
+ServerActive=ZABBIX_SERVER_IP
+Hostname=DNS-SERVER-1

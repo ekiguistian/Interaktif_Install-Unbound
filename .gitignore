@@ -1,0 +1,4 @@
+/unbound.conf
+/blocklist-sources.json
+/zabbix_agentd.conf
+*.bak.*
