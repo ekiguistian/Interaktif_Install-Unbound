@@ -11,6 +11,8 @@ ZABBIX_CONF_BACKUP=''
 ZABBIX_SUDOERS_BACKUP=''
 UNBOUND_CONFIG_BACKUP=''
 UNBOUND_CONFIG_EXISTED='no'
+APT_INDEX_UPDATED='no'
+RESOLV_CONF_BACKUP=''
 
 trap 'if [[ -n "${CONF_TMP:-}" && -f "$CONF_TMP" ]]; then rm -f -- "$CONF_TMP"; fi' EXIT
 on_error() {
@@ -35,8 +37,98 @@ run_as_root() {
     fi
 }
 
+refresh_apt_indexes() {
+    if ! command -v apt-get >/dev/null 2>&1; then
+        error 'Package manager APT tidak ditemukan. Installer ini ditujukan untuk Ubuntu dan Debian.'
+        return 1
+    fi
+    info 'Memperbarui indeks paket APT...'
+    run_as_root apt-get update
+    APT_INDEX_UPDATED='yes'
+}
+
+install_packages() {
+    local packages=("$@")
+    if [[ "$APT_INDEX_UPDATED" != yes ]]; then refresh_apt_indexes; fi
+    run_as_root apt-get install -y "${packages[@]}"
+}
+
+enable_official_zabbix_repository() {
+    local repository_package_url='' package_tmp
+    case "${ID:-}:${VERSION_ID:-}" in
+        ubuntu:24.04) repository_package_url='https://repo.zabbix.com/zabbix/8.0/release/ubuntu/pool/main/z/zabbix-release/zabbix-release_latest+ubuntu24.04_all.deb' ;;
+        ubuntu:26.04) repository_package_url='https://repo.zabbix.com/zabbix/8.0/release/ubuntu/pool/main/z/zabbix-release/zabbix-release_latest+ubuntu26.04_all.deb' ;;
+        debian:12) repository_package_url='https://repo.zabbix.com/zabbix/8.0/release/debian/pool/main/z/zabbix-release/zabbix-release_latest_8.0+debian12_all.deb' ;;
+        debian:13) repository_package_url='https://repo.zabbix.com/zabbix/8.0/release/debian/pool/main/z/zabbix-release/zabbix-release_latest_8.0+debian13_all.deb' ;;
+        *)
+            error "Repository Zabbix resmi belum disiapkan otomatis untuk ${PRETTY_NAME:-OS ini}."
+            return 1
+            ;;
+    esac
+
+    if ! command -v curl >/dev/null 2>&1; then
+        install_packages curl ca-certificates || return 1
+    fi
+    package_tmp="$(mktemp "${TMPDIR:-/tmp}/zabbix-release.XXXXXX.deb")"
+    info 'Paket Zabbix Agent tidak tersedia di APT sistem; memasang konfigurasi repository resmi Zabbix.'
+    if ! curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+        "$repository_package_url" --output "$package_tmp"; then
+        rm -f -- "$package_tmp"
+        error 'Gagal mengunduh paket repository resmi Zabbix melalui HTTPS.'
+        return 1
+    fi
+    if ! run_as_root dpkg -i "$package_tmp"; then
+        rm -f -- "$package_tmp"
+        error 'Gagal memasang konfigurasi repository resmi Zabbix.'
+        return 1
+    fi
+    rm -f -- "$package_tmp"
+    APT_INDEX_UPDATED='no'
+    refresh_apt_indexes || return 1
+}
+
 install_dependencies() {
-    local missing=()
+    local missing=() zabbix_was_installed=no
+
+    if ! command -v apt-get >/dev/null 2>&1; then
+        error 'APT tidak tersedia; gunakan Ubuntu Server atau Debian yang didukung.'
+        return 1
+    fi
+    if (( EUID != 0 )); then
+        if ! command -v sudo >/dev/null 2>&1; then
+            error 'sudo belum tersedia dan pengguna saat ini bukan root. Jalankan sekali sebagai root agar sudo dapat dipasang.'
+            return 1
+        fi
+        info 'Memvalidasi hak sudo sebelum memeriksa dependensi...'
+        sudo -v || { error 'Hak sudo tidak tersedia. Jalankan sebagai root atau pengguna sudo.'; return 1; }
+    fi
+    if command -v zabbix_agentd >/dev/null 2>&1 || [[ -x /usr/sbin/zabbix_agentd ]]; then
+        zabbix_was_installed=yes
+    fi
+
+    refresh_apt_indexes || return 1
+
+    # Zabbix Agent is mandatory. Ubuntu packages it in Universe on supported releases.
+    if [[ "${ID:-}" == ubuntu ]] && ! apt-cache show zabbix-agent >/dev/null 2>&1; then
+        info 'Paket zabbix-agent belum terlihat di APT; mengaktifkan komponen Ubuntu Universe.'
+        if ! command -v add-apt-repository >/dev/null 2>&1; then
+            install_packages software-properties-common || warn 'Komponen Universe tidak dapat diaktifkan; installer akan mencoba repository resmi Zabbix.'
+        fi
+        if command -v add-apt-repository >/dev/null 2>&1 && run_as_root add-apt-repository --yes universe; then
+            APT_INDEX_UPDATED='no'
+            refresh_apt_indexes || return 1
+        else
+            warn 'Universe tidak tersedia atau gagal diperbarui; installer akan mencoba repository resmi Zabbix.'
+        fi
+    fi
+    if ! apt-cache show zabbix-agent >/dev/null 2>&1; then
+        enable_official_zabbix_repository || return 1
+    fi
+    if ! apt-cache show zabbix-agent >/dev/null 2>&1; then
+        error 'Paket zabbix-agent tetap tidak tersedia setelah repository resmi diperiksa.'
+        return 1
+    fi
+
     if ! command -v unbound-checkconf >/dev/null 2>&1 ||
         ! command -v unbound-anchor >/dev/null 2>&1 ||
         ! command -v unbound-control-setup >/dev/null 2>&1; then missing+=(unbound); fi
@@ -44,50 +136,35 @@ install_dependencies() {
     command -v ufw >/dev/null 2>&1 || missing+=(ufw)
     command -v dig >/dev/null 2>&1 || missing+=(dnsutils)
     command -v sudo >/dev/null 2>&1 || missing+=(sudo)
+    command -v git >/dev/null 2>&1 || missing+=(git)
+    command -v curl >/dev/null 2>&1 || missing+=(curl)
+    [[ -x /usr/sbin/zabbix_agentd ]] || command -v zabbix_agentd >/dev/null 2>&1 || missing+=(zabbix-agent)
     [[ -s /usr/share/dns/root.hints || -s /usr/share/unbound/root.hints ]] || missing+=(dns-root-data)
 
-    if ((${#missing[@]} == 0)); then
-        printf 'Dependensi tersedia: Unbound, Python 3, UFW, dig, sudo, dan root hints.\n'
-        return
-    fi
-
-    printf 'Dependensi yang akan dipasang: %s\n' "${missing[*]}"
-    install_packages "${missing[@]}"
-
-    command -v unbound-checkconf >/dev/null 2>&1 || { error 'Unbound belum berhasil dipasang.'; exit 1; }
-    command -v unbound-anchor >/dev/null 2>&1 || { error 'unbound-anchor belum tersedia.'; exit 1; }
-    command -v unbound-control-setup >/dev/null 2>&1 || { error 'unbound-control-setup belum tersedia.'; exit 1; }
-    command -v python3 >/dev/null 2>&1 || { error 'Python 3 belum berhasil dipasang.'; exit 1; }
-    command -v ufw >/dev/null 2>&1 || { error 'UFW belum berhasil dipasang.'; exit 1; }
-    command -v dig >/dev/null 2>&1 || { error 'dig dari paket dnsutils belum tersedia.'; exit 1; }
-    [[ -s /usr/share/dns/root.hints || -s /usr/share/unbound/root.hints ]] || { error 'File root hints dari dns-root-data tidak ditemukan.'; exit 1; }
-}
-
-install_packages() {
-    local packages=("$@")
-    if command -v apt-get >/dev/null 2>&1; then
-        run_as_root apt-get update
-        run_as_root apt-get install -y "${packages[@]}"
+    if ((${#missing[@]})); then
+        info "Dependensi wajib yang akan dipasang: ${missing[*]}"
+        install_packages "${missing[@]}" || return 1
     else
-        error 'Package manager APT tidak ditemukan. Installer ini ditujukan untuk Ubuntu dan Debian.'
-        exit 1
+        info 'Semua dependensi wajib sudah tersedia.'
     fi
-}
 
-install_zabbix_agent_package() {
-    if command -v zabbix_agentd >/dev/null 2>&1 || [[ -x /usr/sbin/zabbix_agentd ]]; then return 0; fi
-    info 'Zabbix agent belum tersedia; memasang paket zabbix-agent.'
-    if [[ "${ID:-}" == ubuntu ]] && ! apt-cache show zabbix-agent >/dev/null 2>&1; then
-        if ! command -v add-apt-repository >/dev/null 2>&1; then
-            install_packages software-properties-common
-        fi
-        run_as_root add-apt-repository --yes universe
+    command -v unbound-checkconf >/dev/null 2>&1 || { error 'Unbound belum berhasil dipasang.'; return 1; }
+    command -v unbound-anchor >/dev/null 2>&1 || { error 'unbound-anchor belum tersedia.'; return 1; }
+    command -v unbound-control-setup >/dev/null 2>&1 || { error 'unbound-control-setup belum tersedia.'; return 1; }
+    command -v python3 >/dev/null 2>&1 || { error 'Python 3 belum berhasil dipasang.'; return 1; }
+    command -v ufw >/dev/null 2>&1 || { error 'UFW belum berhasil dipasang.'; return 1; }
+    command -v dig >/dev/null 2>&1 || { error 'dig dari paket dnsutils belum tersedia.'; return 1; }
+    command -v sudo >/dev/null 2>&1 || { error 'sudo belum berhasil dipasang.'; return 1; }
+    command -v git >/dev/null 2>&1 || { error 'git belum berhasil dipasang.'; return 1; }
+    command -v curl >/dev/null 2>&1 || { error 'curl belum berhasil dipasang.'; return 1; }
+    [[ -x /usr/sbin/zabbix_agentd || $(command -v zabbix_agentd 2>/dev/null || true) ]] || { error 'Zabbix Agent belum berhasil dipasang.'; return 1; }
+    [[ -s /usr/share/dns/root.hints || -s /usr/share/unbound/root.hints ]] || { error 'File root hints dari dns-root-data tidak ditemukan.'; return 1; }
+
+    # A newly installed agent must not run with its package-default localhost settings.
+    if [[ "$zabbix_was_installed" == no ]]; then
+        run_as_root systemctl disable --now zabbix-agent >/dev/null 2>&1 || true
     fi
-    install_packages zabbix-agent
-    if ! command -v zabbix_agentd >/dev/null 2>&1 && [[ ! -x /usr/sbin/zabbix_agentd ]]; then
-        error 'Zabbix agent belum berhasil dipasang.'
-        return 1
-    fi
+    info 'Pemeriksaan seluruh dependensi wajib selesai.'
 }
 
 check_supported_os() {
@@ -107,22 +184,43 @@ check_supported_os() {
     case "$os_id" in
         ubuntu)
             if ! dpkg --compare-versions "$os_version" ge '24.04'; then
-                error "Ubuntu $os_version lebih lama dari minimum Ubuntu Server 24.04."
+                error "OS anda dibawah minimum spesifikasi: Ubuntu $os_version. Perbarui terlebih dahulu ke Ubuntu Server 24.04 atau lebih baru."
                 exit 1
             fi
             ;;
         debian)
             if ! dpkg --compare-versions "$os_version" ge '12'; then
-                error "Debian $os_version lebih lama dari minimum Debian 12."
+                error "OS anda dibawah minimum spesifikasi: Debian $os_version. Perbarui terlebih dahulu ke Debian 12 atau lebih baru."
                 exit 1
             fi
             ;;
         *)
-            error "OS '$os_id' belum didukung. Gunakan Ubuntu Server 24.04+ atau Debian 12+."
+        error "OS anda dibawah minimum spesifikasi atau belum didukung ('$os_id'). Perbarui terlebih dahulu atau gunakan Ubuntu Server 24.04+ atau Debian 12+."
             exit 1
             ;;
     esac
     printf 'OS terdeteksi: %s %s\n' "$PRETTY_NAME" "$os_version"
+}
+
+check_minimum_host() {
+    local cpu_count memory_kb memory_mb var_free_kb minimum_disk_kb=1048576
+    cpu_count="$(getconf _NPROCESSORS_ONLN 2>/dev/null || awk '/^processor[[:space:]]*:/ { count++ } END { print count+0 }' /proc/cpuinfo)"
+    memory_kb="$(awk '/^MemTotal:/ { print $2; exit }' /proc/meminfo)"
+    var_free_kb="$(df -Pk /var | awk 'NR == 2 { print $4 }')"
+
+    if [[ ! "$cpu_count" =~ ^[0-9]+$ || ! "$memory_kb" =~ ^[0-9]+$ || ! "$var_free_kb" =~ ^[0-9]+$ ]]; then
+        error 'Tidak dapat membaca jumlah CPU, RAM, atau ruang kosong /var untuk pemeriksaan minimum.'
+        return 1
+    fi
+    memory_mb=$((memory_kb / 1024))
+
+    printf 'Resource host terdeteksi: CPU %s core, RAM %s MB, ruang kosong /var %s MB.\n' \
+        "$cpu_count" "$memory_mb" "$((var_free_kb / 1024))"
+
+    if (( cpu_count < 1 || memory_mb < 512 || var_free_kb < minimum_disk_kb )); then
+        error 'Spesifikasi sistem di bawah minimum. Perbarui terlebih dahulu: minimal 1 CPU, RAM 512 MB, dan ruang kosong 1 GB pada /var.'
+        return 1
+    fi
 }
 
 ask_choice() {
@@ -466,7 +564,7 @@ backup_and_replace() {
 
 backup_system_file() {
     local path="$1" backup
-    if run_as_root test -e "$path"; then
+    if run_as_root test -e "$path" || run_as_root test -L "$path"; then
         backup="${path}.bak.$(date +%Y%m%d-%H%M%S)"
         run_as_root cp -a -- "$path" "$backup"
         printf '%s' "$backup"
@@ -477,6 +575,7 @@ backup_system_file() {
 restore_system_file() {
     local path="$1" backup="${2:-}"
     if [[ -n "$backup" ]]; then
+        run_as_root rm -f -- "$path"
         run_as_root cp -a -- "$backup" "$path"
         printf 'File sistem dipulihkan dari %s\n' "$backup" >&2
     else
@@ -906,7 +1005,7 @@ enable_ufw_ipv6() {
 }
 
 apply_firewall() {
-    local protocol
+    local protocol ip interface_output
     info 'Menerapkan UFW: reset aturan lama, deny incoming/outgoing, lalu allow port terpilih.'
     enable_ufw_ipv6
     run_as_root ufw --force reset
@@ -942,24 +1041,72 @@ apply_firewall() {
     fi
     local dns_output dnssec_output
     dns_output="$(dig @127.0.0.1 example.com A +time=5 +tries=1 +noall +comments +answer 2>&1)" || true
-    if [[ "$dns_output" != *'status: NOERROR'* ]]; then
-        error 'Query DNS lokal gagal setelah UFW diterapkan; memulihkan konfigurasi Unbound sebelumnya.'
+    if [[ "$dns_output" != *'status: NOERROR'* || "$dns_output" != *'example.com.'* ]]; then
+        error 'Unbound belum berhasil menyelesaikan query Internet melalui 127.0.0.1 setelah UFW aktif; konfigurasi Unbound sebelumnya dipulihkan.'
         printf '%s\n' "$dns_output" >&2
         rollback_unbound_install /etc/unbound/unbound.conf "$UNBOUND_CONFIG_BACKUP" "$UNBOUND_CONFIG_EXISTED"
         return 1
     fi
     dnssec_output="$(dig @127.0.0.1 cloudflare.com A +dnssec +time=5 +tries=1 +noall +comments +answer 2>&1)" || true
     if ! grep -qiE 'flags:.*\bad\b' <<< "$dnssec_output"; then
-        error 'Pemeriksaan DNSSEC setelah UFW gagal; memulihkan konfigurasi Unbound sebelumnya.'
+        error 'Query Internet dengan validasi DNSSEC gagal setelah UFW aktif; konfigurasi Unbound sebelumnya dipulihkan.'
         printf '%s\n' "$dnssec_output" >&2
         rollback_unbound_install /etc/unbound/unbound.conf "$UNBOUND_CONFIG_BACKUP" "$UNBOUND_CONFIG_EXISTED"
         return 1
     fi
+    for ip in "${INTERFACE_IPS[@]}"; do
+        [[ "$ip" == 127.0.0.1 || "$ip" == ::1 ]] && continue
+        interface_output="$(dig "@$ip" example.com A +time=5 +tries=1 +noall +comments +answer 2>&1)" || true
+        if [[ "$interface_output" != *'status: NOERROR'* || "$interface_output" != *'example.com.'* ]]; then
+            error "Unbound gagal menjawab melalui interface $ip; periksa alamat IP dan firewall. Konfigurasi Unbound sebelumnya dipulihkan."
+            printf '%s\n' "$interface_output" >&2
+            rollback_unbound_install /etc/unbound/unbound.conf "$UNBOUND_CONFIG_BACKUP" "$UNBOUND_CONFIG_EXISTED"
+            return 1
+        fi
+    done
     if [[ "$USE_ZABBIX" == yes ]] && ! run_as_root systemctl is-active --quiet zabbix-agent; then
         error 'Zabbix agent tidak aktif setelah firewall diterapkan.'
         return 1
     fi
-    printf 'Pemeriksaan DNS dan DNSSEC berhasil setelah UFW aktif.\n'
+    printf 'Unbound berhasil resolve ke Internet; DNSSEC dan semua IP interface berhasil diperiksa setelah UFW aktif.\n'
+}
+
+configure_vm_system_resolver() {
+    local resolver_file=/etc/resolv.conf resolver_tmp system_dns_output
+    resolver_tmp="$(mktemp "$OUTPUT_DIR/.resolv.conf.XXXXXX")"
+    printf '# Managed by %s\nnameserver 127.0.0.1\noptions timeout:2 attempts:2\n' "$APP_NAME" > "$resolver_tmp"
+    chmod 644 "$resolver_tmp"
+
+    RESOLV_CONF_BACKUP="$(backup_system_file "$resolver_file")"
+    if ! run_as_root cp --remove-destination -- "$resolver_tmp" "$resolver_file"; then
+        rm -f -- "$resolver_tmp"
+        error 'Gagal mengarahkan resolver VM ke 127.0.0.1.'
+        restore_system_file "$resolver_file" "$RESOLV_CONF_BACKUP"
+        return 1
+    fi
+    rm -f -- "$resolver_tmp"
+
+    system_dns_output="$(dig example.com A +time=5 +tries=1 +noall +comments +answer 2>&1)" || true
+    if [[ "$system_dns_output" != *'status: NOERROR'* || "$system_dns_output" != *'example.com.'* ]] ||
+        ! grep -qE '^[[:space:]]*nameserver[[:space:]]+127\.0\.0\.1([[:space:]]|$)' "$resolver_file"; then
+        error 'Resolver host gagal setelah diarahkan ke 127.0.0.1; memulihkan resolver sebelumnya.'
+        printf '%s\n' "$system_dns_output" >&2
+        restore_system_file "$resolver_file" "$RESOLV_CONF_BACKUP"
+        return 1
+    fi
+
+    printf 'Resolver VM sekarang menggunakan 127.0.0.1; query Internet berhasil.\n'
+    if [[ -n "$RESOLV_CONF_BACKUP" ]]; then printf 'Cadangan resolver sebelumnya: %s\n' "$RESOLV_CONF_BACKUP"; fi
+}
+
+show_proxmox_dns_recommendation() {
+    local ip
+    printf '\nSemua pemeriksaan selesai. Resolver LXC tidak diubah otomatis.\n'
+    printf 'Setelah status instalasi ini berhasil, atur DNS container dari Proxmox ke IP interface berikut:\n'
+    for ip in "${INTERFACE_IPS[@]}"; do
+        [[ "$ip" == 127.0.0.1 || "$ip" == ::1 ]] && continue
+        printf '  %s\n' "$ip"
+    done
 }
 
 main() {
@@ -967,8 +1114,10 @@ main() {
     printf '============================================================\n'
     printf ' %s\n' "$APP_NAME"
     printf '============================================================\n'
-    printf 'Tahap 1: periksa dan pasang dependensi sistem (Unbound, Python 3, UFW, dnsutils, sudo, dan root hints).\n'
+    printf 'Tahap 1: validasi OS dan resource minimum host sebelum perubahan dilakukan.\n'
     check_supported_os
+    check_minimum_host
+    printf '\nTahap 2: perbarui indeks APT, lalu periksa dan pasang dependensi wajib (Unbound, Python 3, curl, git, UFW, dnsutils, sudo, Zabbix Agent, dan root hints).\n'
     install_dependencies
 
     while true; do
@@ -985,7 +1134,6 @@ main() {
         review_choice="$(ask_choice 'Pilih tindakan (1-2)' 1 2)"
         [[ "$review_choice" == 2 ]] && continue
 
-        if [[ "$USE_ZABBIX" == yes ]]; then install_zabbix_agent_package; fi
         prepare_unbound_runtime_files
         if [[ "$USE_BLOCKLIST" == yes ]]; then write_blocklist_settings; fi
         deploy_unbound_configuration
@@ -995,6 +1143,11 @@ main() {
         fi
         apply_firewall
         if [[ "$USE_BLOCKLIST" == yes ]]; then install_blocklist_timer; fi
+        if [[ "$SERVER_TYPE" == 'Virtual Machine Host' ]]; then
+            configure_vm_system_resolver
+        else
+            show_proxmox_dns_recommendation
+        fi
         printf '\nInstalasi selesai.\n'
         printf 'File lokal: %s/unbound.conf\n' "$OUTPUT_DIR"
         printf 'File sistem: /etc/unbound/unbound.conf\n'
