@@ -45,6 +45,20 @@ try {
             $result = CommandRunner::run(['/usr/bin/sudo','-n','/usr/local/sbin/unbound-web-manage','view-config'], 10);
             json_response(['ok' => $result['code'] === 0, 'config' => $result['output'], 'message' => $result['code'] === 0 ? '' : trim($result['output'])], $result['code'] === 0 ? 200 : 422);
 
+        case 'system-dns-set':
+            $raw = $payload['nameservers'] ?? '';
+            if (!is_string($raw) || strlen($raw) > 180) fail_validation('Daftar IP DNS tidak valid.');
+            $addresses = preg_split('/[\s,]+/', trim($raw), -1, PREG_SPLIT_NO_EMPTY);
+            if (!$addresses || count($addresses) > 3) fail_validation('Masukkan satu sampai tiga alamat IP DNS.');
+            foreach ($addresses as $address) {
+                if (filter_var($address, FILTER_VALIDATE_IP) === false) fail_validation('Alamat DNS harus berupa IPv4 atau IPv6.');
+            }
+            $result = CommandRunner::run(
+                ['/usr/bin/sudo', '-n', '/usr/local/sbin/unbound-web-manage', 'system-dns-set', ...array_unique($addresses)],
+                40
+            );
+            json_response(['ok' => $result['code'] === 0, 'message' => trim($result['output'])], $result['code'] === 0 ? 200 : 422);
+
         case 'unbound-logging-set':
             $queries = $payload['log_queries'] ?? '';
             $replies = $payload['log_replies'] ?? '';

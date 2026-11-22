@@ -3,27 +3,16 @@
 ## Lingkup dan riwayat
 
 - Repository aktif adalah `ekiguistian/Interaktif_Install-Unbound`, branch `main`. Repository `ekiguistian/Configurasi-DNS-Resolver-Unbound` adalah repository lama.
-- Proyek bermula dari generator konfigurasi interaktif PowerShell/BAT, lalu beralih ke Bash untuk instalasi Linux. Tool terminal yang tersedia adalah `Install-cli.sh`, `Uninstall.sh`, dan `Tes.sh`; nama `Install-cli.sh` membedakan installer CLI dari `install.sh` web pada filesystem Windows.
-- Web Manager dan CLI hanya mendukung Ubuntu Server 22.04 LTS Jammy dengan systemd aktif. Aplikasi memakai PHP 8.4 Native, PDO/MySQL, Nginx port 8000, URL tanpa ekstensi, Tailwind CSS, Font Awesome, dan Chart.js.
+- Proyek bermula dari generator konfigurasi interaktif. Tool terminal lama sudah dihapus. Gunakan `install.sh` untuk pemasangan Web Manager dan `update.sh` untuk pembaruan.
+- Web Manager hanya mendukung Ubuntu Server 22.04 LTS Jammy dengan systemd aktif. Aplikasi memakai PHP 8.4 Native, PDO/MySQL, Nginx port 8000, URL tanpa ekstensi, Tailwind CSS, Font Awesome, dan Chart.js.
 - Percakapan sebelumnya pernah meminta penghapusan AGENTS.md. File ini dibuat ulang atas permintaan terbaru sebagai catatan percakapan dan keputusan proyek.
-
-## Alur CLI
-
-- Periksa OS sebelum perubahan. Installer juga memeriksa CPU, RAM, dan disk serta mengenali dependensi yang sudah terpasang. README mencakup persiapan Ubuntu, pemasangan Git sebelum clone, wizard, dan pemeriksaan DNS. Panduan terminal ada di `CLI.md`.
-- Form interaktif mencakup tipe host VM atau LXC, spesifikasi, perkiraan perangkat, sasaran cache, IP interface, ACL, PTR, logging, root recursion atau forwarder, blocklist/whitelist, dan Zabbix. Contoh laboratorium awal memakai 4 core dan RAM 4 GB. Angka cache hit adalah sasaran, bukan jaminan.
-- Mode root memakai root hints dan validasi DNSSEC. TLD publik mengikuti delegasi DNS. Default forwarder adalah 1.1.1.1 dan 8.8.8.8 jika daftar tidak diisi. Gunakan IP privat dan `yourdomain.com` untuk contoh publik.
-- Pengaturan daftar DNS CLI mencakup URL sumber blocklist dan whitelist serta tujuan redirect. Pengaturan Zabbix mencakup hostname dan alamat server. Aturan UFW CLI menangani DNS, HTTPS, dan sumber SSH menurut alur di README.
-- Verifikasi resolver Internet sebelum instalasi dan uji query lokal serta DNSSEC sebelum VM diarahkan ke 127.0.0.1. LXC Proxmox mempertahankan resolver container dan menampilkan arahan pengaturan DNS di Proxmox.
-- Rollback CLI memakai snapshot awal. Pulihkan konfigurasi, resolver, service, dan firewall yang dikelola installer. Hapus hanya paket yang dipasang pada percobaan itu. Uninstaller menampilkan rencana dan hasil setiap tahap serta meminta konfirmasi sebelum mereset UFW atau menghapus konfigurasi.
-- Gunakan contoh generik. Terminal interaktif menampilkan OS, informasi hijau, proses biru, error/peringatan merah, dan indikator jam pasir untuk proses lama. `NO_COLOR=1` mematikan warna. Output konfigurasi dan ringkasan tetap berupa teks biasa.
-- `Tes.sh` memakai 100 domain umum dan menguji 127.0.0.1 dengan dnsperf. Durasi maksimal lima menit. CLI menerima jumlah client, thread, dan QPS dari pengguna. README memuat panduan membaca log query/reply, resolusi, benchmark, dan hasil.
 
 ## Alur Web Manager
 
 - `install.sh` memvalidasi Jammy dan resource, lalu memasang PHP 8.4, Nginx, MySQL, dnsperf, Git, UFW, dan dependensi kompilasi. Installer mengaktifkan unit yang dibutuhkan, menyiapkan database dan cron worker, mendeteksi IP serta interface, dan membuat `/etc/unbound-web/.env` dengan izin `0640`. Password database berasal dari 10 byte acak. Kredensial dipakai kembali saat installer dijalankan ulang. Setelah web dan koneksi database lolos pemeriksaan, output terakhir adalah URL, Username, dan Password admin. Unbound dan Zabbix dipasang dari web.
-- Wizard admin memakai DNS yang ada selama build. VM dengan resolver yang bisa diganti beralih ke Unbound setelah uji DNS dan DNSSEC. LXC dan file resolver yang dikelola host tetap memakai DNS sistem yang ada. Kegagalan mengembalikan perubahan resolver VM dan status systemd-resolved, termasuk saat mengulang wizard lama yang gagal pada file read-only.
+- Wizard mempertahankan DNS sistem pada VM dan LXC, termasuk saat gagal. Setelah Unbound aktif, admin dapat mengubah atau menambah hingga tiga IP DNS sistem lewat Settings. Gunakan mount guard, validasi IP, pemeriksaan koneksi, dan rollback untuk perubahan yang diminta dari Settings.
 - Jalankan perubahan sistem dari web sebagai unit systemd sementara melalui helper dengan daftar aksi tetap. Pertahankan pembatasan mount PHP-FPM.
-- **Check for Update** hanya menerima aksi tetap dan melakukan pull fast-forward dari branch main repo resmi di checkout khusus milik root. Jangan tampilkan log root atau kredensial installer dalam respons pembaruan.
+- **Check for Update** di wizard dan Settings memanggil `update.sh` melalui aksi tetap. Gunakan checkout Git branch main milik root, pasang semua file terlacak dan helper, lalu cocokkan commit yang disajikan Nginx. `install.sh` menyiapkan Git saat pemasangan awal. Jaga kredensial di luar checkout dan web root.
 - Dashboard Live Monitor bersifat publik dan mengambil status serta metrik DNS/server melalui API. Navbar index hanya menampilkan **Install Wizard** sebelum Unbound terpasang atau **Setting** setelah terpasang.
 - Navbar melayang Settings berisi **Unbound**, **Zabbix Agent**, **Firewall**, dan **Log Out**. Logout memakai POST dan CSRF.
 - **Unbound** mengelompokkan form resolver, tampilan baca saja `unbound.conf`, toggle log query/reply terpisah, blocklist, whitelist, cron, dnsperf, dan domain uji. Validasi perubahan sebelum reload. Worker mengambil statistik Unbound dan server setiap menit dan menyimpan riwayat di MySQL.
@@ -36,7 +25,7 @@
 - Pastikan binary `unbound-anchor` tersedia dari paket Ubuntu atau hasil build source sebelum bootstrap DNSSEC.
 - Installer lama bisa meninggalkan repository MySQL Oracle dan keyring yang kedaluwarsa. Tangani pemulihan di `install.sh` sebelum APT. Cocokkan entri lama, cadangkan bila paket Community belum ada, atau perbarui keyring secara atomik setelah fingerprint dan tanda tangan Oracle lolos verifikasi.
 - Kasus `cp: 'etc': No such file or directory` terjadi saat backup APT. Buat lokasi tujuan lebih dulu, gunakan path absolut, dan periksa keberhasilan backup sebelum mengubah sistem.
-- Simpan state root di lokasi milik root. Unduh root hints ke file sementara, terima record NS root dengan kelas IN eksplisit atau implisit, validasi izin, lalu ganti secara atomik. Jalankan `configure` dan `make` dari direktori source. `unbound-anchor` dapat mengembalikan status 1 saat trust anchor berhasil dipasang, sehingga periksa file hasil dan uji DNSSEC sebelum mengalihkan resolver.
+- Simpan state root di lokasi milik root. Unduh root hints ke file sementara, terima record NS root dengan kelas IN eksplisit atau implisit, validasi izin, lalu ganti secara atomik. Jalankan `configure` dan `make` dari direktori source. `unbound-anchor` dapat mengembalikan status 1 saat trust anchor berhasil dipasang, sehingga periksa file hasil dan uji DNSSEC sebelum menyatakan wizard berhasil.
 - Nginx meneruskan clean URL hanya ke front controller. Endpoint SSE memerlukan FastCGI buffering nonaktif. Pertahankan site Nginx lain yang sudah ada.
 - Dokumentasi, label, dan ringkasan memakai bahasa Indonesia yang singkat. Jangan masukkan kredensial, nama host produksi, atau URL privat ke Git.
-- Jalankan lint PHP, pemeriksaan sintaks Bash per file, `node --check public/assets/app.js`, dan `git diff --check`. Bedakan pemeriksaan Windows dari verifikasi runtime pada Ubuntu. Dokumentasikan instalasi, uninstall CLI, dnsperf, log, keamanan, kontribusi, dan alur push di README.
+- Jalankan lint PHP, pemeriksaan sintaks Bash per file, `node --check public/assets/app.js`, dan `git diff --check`. Bedakan pemeriksaan Windows dari verifikasi runtime pada Ubuntu. Dokumentasikan instalasi, pembaruan, pengaturan DNS, dan pemeriksaan Web Manager di README.

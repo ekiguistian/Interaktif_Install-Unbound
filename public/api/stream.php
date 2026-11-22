@@ -51,11 +51,6 @@ header('Cache-Control: no-cache, no-store, must-revalidate');
 header('X-Accel-Buffering: no');
 flush();
 $exitCode=CommandRunner::stream($args);
-if ($task==='wizard' && $exitCode!==0) {
-    echo 'data: ' . json_encode(['output' => "\nMemulihkan resolver sistem setelah kegagalan...\n"], JSON_UNESCAPED_SLASHES) . "\n\n";
-    flush();
-    CommandRunner::stream(['/usr/bin/sudo','-n','/usr/local/sbin/unbound-web-manage','wizard-rollback']);
-}
 if ($task==='zabbix-install' && $exitCode===0) {
     $statement=db()->prepare('INSERT INTO app_settings (setting_key,setting_value) VALUES (?,?) ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)');
     foreach (['zabbix_server'=>$server,'zabbix_server_active'=>$active,'zabbix_hostname'=>$hostname] as $key=>$value) $statement->execute([$key,$value]);

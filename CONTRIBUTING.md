@@ -14,7 +14,7 @@ Ganti IP dan domain dengan contoh seperti `192.168.1.10` dan `yourdomain.com`. H
 ## Kirim perubahan
 
 - Ajukan perubahan melalui pull request.
-- Web Manager dan CLI menargetkan Ubuntu Server 22.04 LTS. Lihat [CLI.md](CLI.md) untuk panduan tool terminal.
+- Web Manager menargetkan Ubuntu Server 22.04 LTS.
 - Gunakan nilai contoh yang umum. Simpan kredensial dan konfigurasi produksi di luar repo.
 - Perbarui panduan terkait jika langkah instalasi, pilihan, atau dependensi berubah.
 
@@ -22,11 +22,10 @@ Jalankan pemeriksaan yang sesuai dengan file yang diubah.
 
 ```bash
 bash -n install.sh
-bash -n Install-cli.sh
-bash -n Uninstall.sh
-bash -n Tes.sh
+bash -n update.sh
 bash -n scripts/manage.sh
-bash -n scripts/push-github.sh
+bash -n scripts/web-deploy.bash
+bash -n scripts/web-migrate.bash
 find app public bin -name '*.php' -print0 | xargs -0 -n1 php -l
 node --check public/assets/app.js
 git diff --check

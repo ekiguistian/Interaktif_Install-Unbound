@@ -10,6 +10,10 @@ $loggedIn = admin_logged_in();
     <?php if (!$loggedIn): ?>
       <div class="mt-6 rounded-xl border border-amber-400/25 bg-amber-400/10 p-4 text-sm text-amber-100">Login diperlukan sebelum source Unbound dikompilasi atau konfigurasi DNS diubah. <a class="font-semibold underline" href="/login?next=%2Fwizard">Login admin</a></div>
     <?php else: ?>
+      <form class="mt-6" data-stream="app-update" data-output="#wizard-update-output" data-confirm="Tarik dan pasang source terbaru dari branch main?">
+        <button class="btn-secondary" type="submit"><i class="fa-solid fa-rotate" aria-hidden="true"></i>Check for Update</button>
+      </form>
+      <pre id="wizard-update-output" role="status" class="mt-3 max-h-48 overflow-auto rounded-xl border border-slate-700 bg-black/50 p-3 text-sm text-slate-300">Perbarui Web Manager sebelum melanjutkan wizard bila diperlukan.</pre>
       <ol id="wizard-steps" class="mt-7 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <?php foreach (['Cek sistem dan DNS','Unduh source resmi','Kompilasi & install','Setup root hints, DNSSEC & service','Verifikasi DNS dan resolver'] as $index => $label): ?>
         <li class="rounded-xl border border-slate-700 bg-slate-900/70 p-3 text-sm"><span class="mb-2 grid h-7 w-7 place-items-center rounded-full bg-slate-800 text-cyan-200"><?= $index + 1 ?></span><?= e($label) ?></li>

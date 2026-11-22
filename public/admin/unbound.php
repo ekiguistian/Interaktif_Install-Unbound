@@ -4,6 +4,10 @@ require_once __DIR__ . '/../../app/layout.php';
 require_admin();
 $logging = CommandRunner::run(['/usr/bin/sudo', '-n', '/usr/local/sbin/unbound-web-manage', 'unbound-logging-status'], 20);
 $loggingReady = $logging['code'] === 0 && preg_match('/^(yes|no) (yes|no)$/D', trim($logging['output']), $logValues);
+$dnsStatus = CommandRunner::run(['/usr/bin/sudo', '-n', '/usr/local/sbin/unbound-web-manage', 'system-dns-status'], 15);
+$dnsLines = $dnsStatus['code'] === 0 ? preg_split('/\R/', trim($dnsStatus['output'])) : [];
+$dnsMode = array_shift($dnsLines);
+$nameservers = implode("\n", $dnsLines);
 page_start('Konfigurasi Unbound', true);
 ?>
 <section class="grid gap-5 xl:grid-cols-[1fr_.85fr]">
@@ -34,6 +38,27 @@ page_start('Konfigurasi Unbound', true);
     </div>
     <pre data-page-result class="mt-5 max-h-[38rem] min-h-64 overflow-auto rounded-xl border border-slate-700 bg-black/50 p-4 font-mono text-xs leading-6 text-emerald-200">Klik “Muat file” untuk membaca konfigurasi aktif.</pre>
   </div>
+</section>
+<section class="panel mt-5 p-5 sm:p-6">
+  <h2 class="font-semibold">DNS sistem</h2>
+  <p class="mt-2 text-sm text-slate-400">Alamat di sini dipakai Ubuntu untuk mencari domain. Gunakan satu alamat IPv4 atau IPv6 per baris, maksimal tiga.</p>
+  <?php if ($dnsMode === 'ready'): ?>
+    <form class="mt-4 space-y-3" data-api="system-dns-set" data-confirm="Terapkan daftar ini sebagai DNS sistem Ubuntu?">
+      <label for="system-nameservers" class="block text-sm">IP DNS sistem</label>
+      <textarea id="system-nameservers" name="nameservers" class="form-input" rows="3" maxlength="180" required><?= e($nameservers) ?></textarea>
+      <button class="btn-primary" type="submit">Simpan DNS sistem</button>
+      <p data-result role="status" class="text-sm text-cyan-200"></p>
+    </form>
+  <?php else: ?>
+    <?php if ($nameservers !== ''): ?>
+      <pre class="mt-3 rounded-xl bg-black/50 p-3 text-sm"><?= e($nameservers) ?></pre>
+    <?php endif; ?>
+    <p class="mt-3 text-sm text-slate-400"><?= e(match ($dnsMode) {
+        'not-ready' => 'Selesaikan wizard Unbound untuk membuka pengaturan DNS sistem.',
+        'read-only' => 'DNS sistem dikelola host atau bersifat read-only. Atur alamatnya dari Proxmox atau pengelola host.',
+        default => 'Status DNS sistem belum dapat dibaca.',
+    }) ?></p>
+  <?php endif; ?>
 </section>
 <section class="panel mt-5 p-5 sm:p-6">
   <h2 class="font-semibold">Log query dan reply</h2>

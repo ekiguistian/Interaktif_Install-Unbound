@@ -73,9 +73,13 @@ dig @127.0.0.1 nlnetlabs.nl A +dnssec
 
 Service harus berstatus `active`, API harus mengembalikan `"ok":true`, dan hasil `dig` harus menampilkan `NOERROR` serta flag `ad`.
 
-Pada VM dengan file resolver yang bisa diganti, wizard mengarahkan DNS sistem ke Unbound setelah pengujian. Pada LXC atau resolver yang dikelola host, wizard mempertahankan `/etc/resolv.conf`. Unbound tetap dapat diuji langsung di `127.0.0.1:53`. Jika ingin menggunakan Unbound untuk klien atau container lain, gunakan IP LAN setelah langkah berikutnya.
+Wizard mempertahankan `/etc/resolv.conf` pada VM dan LXC. Unbound dapat langsung diuji di `127.0.0.1:53`.
 
-### 6. Hubungkan klien LAN dan monitoring bila diperlukan
+### 6. Atur IP DNS setelah instalasi
+
+Buka **Setting → Unbound → DNS sistem** untuk mengganti atau menambah hingga tiga alamat DNS yang dipakai Ubuntu. Isi satu IP per baris. Masukkan `127.0.0.1` jika ingin Ubuntu memakai Unbound lokal. Jika file hanya bisa dibaca atau dipasang oleh host, alamat ditampilkan dalam mode baca saja. Ubah DNS melalui Proxmox atau pengelola host.
+
+### 7. Hubungkan klien LAN dan monitoring bila diperlukan
 
 1. Untuk melayani klien LAN, buka **Setting → Unbound**. Tambahkan IP LAN server, misalnya `192.168.1.2`, dan subnet klien, misalnya `192.168.1.0/24`, sambil mempertahankan interface dan ACL loopback. Validasi dan terapkan konfigurasi.
 2. Jika memakai UFW, buka **Firewall**. Pastikan akses SSH dan TCP 8000 dari jaringan admin tersedia. Tambahkan **Allow IN** untuk TCP dan UDP port 53 dari subnet klien. Jika LXC tidak punya akses netfilter, buat aturan tersebut di firewall Proxmox atau host.
@@ -97,9 +101,9 @@ flowchart TD
     I -->|Belum| J["Install Wizard dan login admin"]
     J --> K["Siapkan resolver, kompilasi Unbound, pasang root hints dan DNSSEC"]
     K --> L{"Uji DNS dan DNSSEC lulus?"}
-    L -->|Tidak| M["Pulihkan resolver sebelumnya"]
-    L -->|Ya| N["VM dapat beralih ke Unbound dan LXC mempertahankan DNS host"]
-    N --> O["Periksa service dan DNS, lalu buka Setting"]
+    L -->|Tidak| M["Tampilkan kesalahan tanpa mengubah DNS sistem"]
+    L -->|Ya| N["Unbound aktif di loopback, DNS sistem tetap"]
+    N --> O["Buka Setting untuk mengatur IP DNS bila diperlukan"]
     I -->|Sudah| O
     O --> P["Unbound, Zabbix Agent, dan Firewall"]
     P --> Q["Worker merekam metrik setiap menit"]
@@ -112,12 +116,12 @@ flowchart TD
 | --- | --- |
 | **Live Monitor** | Status dan versi Unbound, status Zabbix, query dan reply, QPS, cache hit, tipe query, kode respons, waktu rekursi, trafik jaringan, CPU, RAM, disk, dan uptime. Grafik menampilkan data satu jam terakhir. |
 | **Install Wizard** | Kompilasi Unbound dari source NLnet Labs, pemasangan root hints, DNSSEC, sertifikat control, unit systemd, dan pemeriksaan resolver. Output proses tampil langsung. |
-| **Unbound** | Atur interface DNS, ACL, thread, cache, TTL, prefetch, dan DNSSEC. Baca `unbound.conf` dan atur log query serta reply secara terpisah. |
+| **Unbound** | Atur interface DNS, ACL, cache, log, dan opsi DNSSEC. Baca `unbound.conf` dan kelola alamat DNS sistem setelah wizard selesai. |
 | **Blocklist dan Whitelist** | Kelola sumber HTTPS dan domain pengecualian. Mendukung format hosts, Adblock `\|\|domain^`, dan daftar domain biasa. Jalankan sinkronisasi langsung atau terjadwal. |
 | **Cron dan uji DNS** | Jadwalkan pembaruan root hints atau blocklist. Kelola domain uji dan jalankan dnsperf ke IP lokal atau privat hingga 300 detik dengan pilihan client, thread, dan QPS. |
 | **Zabbix Agent** | Pasang agent, atur `Server`, `ServerActive`, dan `Hostname`, lalu gunakan Enable, Disable, atau Restart. |
 | **Firewall** | Lihat status UFW, aktifkan atau nonaktifkan firewall, serta tambah, ubah, dan hapus aturan Allow atau Deny untuk arah IN dan OUT. |
-| **Check for Update** | Periksa dan pasang commit baru dari branch `main` melalui halaman Setting. |
+| **Check for Update** | Tarik dan terapkan branch `main` dari halaman Install Wizard atau Setting. |
 
 Worker menyimpan riwayat hingga 30 hari. Log worker ada di `/var/log/unbound-web/worker.log` dan log sinkronisasi di `/var/log/unbound-web/blocklist.log`.
 
@@ -126,20 +130,21 @@ Worker menyimpan riwayat hingga 30 hari. Log worker ada di `/var/log/unbound-web
 `git clone` membuat salinan pertama repository dan cukup dijalankan sekali. Untuk memperbarui salinan yang sudah ada, masuk ke folder clone lalu jalankan:
 
 ```bash
-git pull --ff-only origin main && sudo bash ./install.sh
+git pull --ff-only origin main && sudo bash ./update.sh
 ```
 
-`origin` adalah nama remote dan `main` adalah nama branch. `--ff-only` menghentikan pembaruan jika riwayat lokal sudah bercabang. Hanya jalankan `install.sh` dari salinan repo yang dipercaya. Jika login sebagai root, jalankan tanpa `sudo`.
+`origin` adalah nama remote dan `main` adalah nama branch. `--ff-only` menghentikan pembaruan jika riwayat lokal sudah bercabang. Jika login sebagai root, jalankan tanpa `sudo`.
 
-Setelah versi ini terpasang, buka **Setting → Check for Update** untuk memperbarui dari browser. Aplikasi menjalankan `git pull --ff-only` dari repo resmi pada checkout milik root, lalu menerapkan versi baru dan memeriksa layanan. Fitur ini memperbarui kode Web Manager dan skema aplikasinya. Untuk pemasangan ulang dependensi atau konfigurasi layanan, gunakan alur terminal di atas.
+Untuk pembaruan berikutnya, login sebagai admin dan pilih **Check for Update** di **Install Wizard** atau **Setting**. Tombol ini menjalankan updater yang sama seperti di terminal.
+
+`install.sh` memasang Git dan menyiapkan checkout milik root di `/var/lib/unbound-web-updates/checkout`. `update.sh` menarik branch `main` ke checkout tersebut, menempatkan seluruh file yang dilacak Git di `/opt/unbound-web`, lalu mengganti helper di `/usr/local/sbin/unbound-web-manage`. Nginx menyajikan folder `/opt/unbound-web/public`. Updater memeriksa commit lewat Nginx dan memulihkan file aplikasi serta helper sebelumnya jika pemeriksaan gagal. Pembaruan menjaga database dan konfigurasi di `/etc`.
 
 ## Yang perlu diperhatikan
 
-- **Port jaringan.** Pastikan TCP 8000 dapat dijangkau dari jaringan admin. Wizard membutuhkan port 53 pada alamat loopback dan akses DNS keluar. Di VM, wizard dapat menghentikan `systemd-resolved` setelah Unbound lulus uji. LXC perlu systemd dan jaringan yang mengizinkan layanan di dalam container.
+- **Port jaringan.** Pastikan TCP 8000 dapat dijangkau dari jaringan admin. Wizard membutuhkan port 53 pada alamat loopback dan akses DNS keluar. LXC perlu systemd dan jaringan yang mengizinkan layanan di dalam container.
 - **Akses SSH.** Sebelum mengaktifkan UFW, pastikan aturan SSH dan port web sudah benar. Pada aturan IN, IP/CIDR adalah sumber. Pada aturan OUT, IP/CIDR adalah tujuan. Aturan lanjutan tampil dalam mode baca saja. Periksa urutan aturan setelah mengubah port, arah, protokol, atau alamat karena aturan pengganti ditambahkan di akhir.
 - **Pemeriksaan awal.** Jika halaman gagal dibuka, periksa `sudo nginx -t`, `sudo systemctl status nginx php8.4-fpm mysql`, dan hasil `curl -fsS http://127.0.0.1:8000/api/metrics` dari server.
 - **Aset browser.** Browser mengambil Tailwind CSS, Font Awesome, dan Chart.js dari CDN. Tampilan lengkap dan grafik memerlukan akses CDN.
-- **Tool terminal.** Installer CLI dan uninstaller mengelola file resolver dan firewall host. Lihat [panduan CLI](CLI.md) sebelum menggunakannya pada server yang sama.
 
 ### APT menampilkan `EXPKEYSIG` untuk MySQL
 

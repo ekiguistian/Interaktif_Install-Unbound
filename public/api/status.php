@@ -2,6 +2,13 @@
 declare(strict_types=1);
 require_once __DIR__ . '/../../app/functions.php';
 header('Cache-Control: no-store, max-age=0');
+if (in_array($_SERVER['REMOTE_ADDR'] ?? '', ['127.0.0.1', '::1'], true)) {
+    $revisionFile = APP_ROOT . '/revision';
+    $revision = is_readable($revisionFile) ? trim((string)file_get_contents($revisionFile)) : '';
+    if (preg_match('/^[a-f0-9]{40}$/D', $revision)) {
+        header('X-Unbound-Web-Revision: ' . $revision);
+    }
+}
 
 try {
     $rows = db()->query('SELECT recorded_at,total_queries,total_replies,cache_hits,cache_hit_ratio,qps,rx_bytes,tx_bytes,query_types_json,response_codes_json,recursion_avg_ms,cpu_percent,load_1m,load_5m,load_15m,memory_used_mb,memory_total_mb,disk_used_gb,disk_total_gb,uptime_seconds FROM metrics WHERE recorded_at >= NOW() - INTERVAL 1 HOUR ORDER BY recorded_at DESC LIMIT 60')->fetchAll();
