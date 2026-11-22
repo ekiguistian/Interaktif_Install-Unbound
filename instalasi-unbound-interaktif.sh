@@ -127,7 +127,7 @@ snapshot_local_outputs() {
 }
 
 begin_transaction() {
-    local path service active enabled account user_present group_present
+    local path snapshot_path service active enabled account user_present group_present
     local -a transaction_paths=("${TRANSACTION_PATHS[@]}")
     TRANSACTION_DIR="$OUTPUT_DIR/.unbound-installer-rollback"
 
@@ -153,7 +153,12 @@ begin_transaction() {
     for path in "${transaction_paths[@]}"; do
         if run_as_root test -e "$path" || run_as_root test -L "$path"; then
             printf '%s\n' "$path" >> "$TRANSACTION_DIR/paths.present"
-            run_as_root cp -a --parents -- "$path" "$TRANSACTION_DIR/files" || {
+            snapshot_path="$TRANSACTION_DIR/files/${path#/}"
+            run_as_root mkdir -p -- "${snapshot_path%/*}" || {
+                error "Gagal membuat direktori snapshot untuk $path."
+                return 1
+            }
+            run_as_root cp -a -- "$path" "$snapshot_path" || {
                 error "Gagal menyimpan kondisi awal $path."
                 return 1
             }
