@@ -14,7 +14,7 @@ Script instalasi dan uninstalasi mengubah paket, konfigurasi DNS, resolver host,
 
 Log query dapat memuat alamat IP klien dan nama domain yang diminta. Batasi akses ke log dan matikan pencatatan query jika tidak dibutuhkan.
 
-Script dnsperf hanya mengirim query ke `127.0.0.1`. Jangan gunakan dnsperf untuk membebani resolver atau layanan milik pihak lain. Untuk pengujian server lain, pastikan ada izin dari pemiliknya.
+Script dnsperf hanya mengirim query ke `127.0.0.1`, tetapi dapat memakai CPU dan mengirim query tanpa batas QPS dari script selama maksimal 5 menit. Jalankan saat beban rendah; layanan DNS lain di host yang sama dapat melambat. Jangan gunakan dnsperf untuk membebani resolver atau layanan milik pihak lain. Untuk pengujian server lain, pastikan ada izin dari pemiliknya.
 
 ## Melaporkan masalah
 

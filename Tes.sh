@@ -77,6 +77,31 @@ ask_integer() {
     done
 }
 
+ask_positive_integer() {
+    local prompt="$1" default="$2" value
+    while true; do
+        printf '%s [%s]: ' "$prompt" "$default"
+        IFS= read -r value || return 1
+        [[ -n "$value" ]] || value="$default"
+        if [[ "$value" =~ ^[1-9][0-9]*$ ]]; then
+            printf '%s' "$value"
+            return 0
+        fi
+        warn 'Masukkan bilangan bulat lebih dari 0.'
+    done
+}
+
+detect_cpu_cores() {
+    local count=''
+    if command -v nproc >/dev/null 2>&1; then
+        count="$(nproc)"
+    elif command -v getconf >/dev/null 2>&1; then
+        count="$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)"
+    fi
+    [[ "$count" =~ ^[1-9][0-9]*$ ]] || count=1
+    printf '%s' "$count"
+}
+
 read_metric() {
     local label="$1"
     awk -F':[[:space:]]*' -v key="$label" '$1 == key { value = $2 } END { if (value == "") print "tidak tersedia"; else print value }' "$RUN_LOG"
@@ -93,7 +118,9 @@ show_summary() {
     printf 'DNS yang diuji       : %s:%s\n' "$SERVER_IP" "$SERVER_PORT"
     printf 'Jumlah domain        : 100 domain (tipe A)\n'
     printf 'Durasi uji           : %s detik\n' "$DURATION"
-    printf 'Batas beban          : %s query/detik, 1 client, 1 thread\n' "$MAX_QPS"
+    printf 'Client dnsperf       : %s\n' "$CLIENTS"
+    printf 'Pasangan thread      : %s\n' "$THREADS"
+    printf 'Batas query/detik    : tidak dibatasi oleh script\n'
     printf 'Query dikirim        : %s\n' "$(read_metric 'Queries sent')"
     printf 'Query selesai        : %s\n' "$(read_metric 'Queries completed')"
     printf 'Query hilang         : %s\n' "$(read_metric 'Queries lost')"
@@ -114,12 +141,14 @@ show_summary() {
 }
 
 main() {
-    local test_status=0 dns_output dnssec_output
+    local test_status=0 dns_output dnssec_output confirmation
     printf '============================================================\n'
     printf ' %s\n' "$APP_NAME"
     printf '============================================================\n'
     printf 'Pengujian berjalan dari server yang sama ke %s:%s.\n' "$SERVER_IP" "$SERVER_PORT"
     printf 'Daftar query berisi 100 domain umum dengan tipe record A.\n'
+    CPU_CORES="$(detect_cpu_cores)"
+    printf 'Jumlah CPU terdeteksi: %s core. Nilai awal client dan thread mengikuti jumlah ini.\n' "$CPU_CORES"
     printf 'Tahap 1: memeriksa dan memasang dnsperf/dig bila belum tersedia.\n'
     install_missing_packages
 
@@ -164,22 +193,33 @@ main() {
     SUMMARY_LOG="$RESULT_DIR/ringkasan-$stamp.txt"
     cp -- "$DOMAIN_SOURCE" "$query_file"
 
-    printf '\nPeringatan: dnsperf memberi beban tambahan ke CPU server. Beban dibatasi 1 client dan 1 thread.\n'
+    printf '\nPeringatan: dnsperf akan mengirim query tanpa batas QPS dari script.\n'
+    printf 'Client dan thread dapat memakai CPU server. DNS klien lain bisa melambat selama pengujian.\n'
     if grep -Eq '^[[:space:]]*log-(queries|replies):[[:space:]]*yes' /etc/unbound/unbound.conf 2>/dev/null; then
         warn 'Log query/reply aktif. Pencatatan log dapat menurunkan hasil benchmark; hasil ini mengukur konfigurasi yang sedang berjalan.'
     fi
-    DURATION="$(ask_integer 'Durasi pengujian dalam detik (5-300)' 10 5 300)"
-    MAX_QPS="$(ask_integer 'Batas query per detik (1-2000)' 50 1 2000)"
+    DURATION="$(ask_integer 'Durasi pengujian dalam detik (5-300)' 300 5 300)"
+    CLIENTS="$(ask_positive_integer 'Jumlah client dnsperf (tanpa batas dari script)' "$CPU_CORES")"
+    THREADS="$(ask_positive_integer 'Jumlah pasangan thread send/receive (tanpa batas dari script)' "$CPU_CORES")"
+    printf '\nRencana uji: %s detik, %s client, %s pasangan thread, tanpa batas QPS dari script.\n' \
+        "$DURATION" "$CLIENTS" "$THREADS"
+    printf 'Ketik MULAI untuk menjalankan, atau tekan Enter untuk batal: '
+    IFS= read -r confirmation || return 1
+    if [[ "$confirmation" != MULAI ]]; then
+        printf 'Pengujian dibatalkan; Unbound tidak diubah.\n'
+        return 0
+    fi
 
     printf '\nTahap 2: pemanasan cache menggunakan 100 domain satu kali.\n'
-    if ! dnsperf -f inet -s "$SERVER_IP" -p "$SERVER_PORT" -d "$query_file" -n 1 -c 1 -T 1 -Q "$MAX_QPS" 2>&1 | tee "$WARMUP_LOG"; then
+    if ! dnsperf -f inet -s "$SERVER_IP" -p "$SERVER_PORT" -d "$query_file" \
+        -n 1 -c "$CLIENTS" -T "$THREADS" 2>&1 | tee "$WARMUP_LOG"; then
         error 'Pemanasan cache gagal. Periksa output di atas.'
         return 1
     fi
 
     printf '\nTahap 3: pengukuran dnsperf selama %s detik.\n' "$DURATION"
     if dnsperf -f inet -s "$SERVER_IP" -p "$SERVER_PORT" -d "$query_file" \
-        -l "$DURATION" -c 1 -T 1 -Q "$MAX_QPS" -S 2 2>&1 | tee "$RUN_LOG"; then
+        -l "$DURATION" -c "$CLIENTS" -T "$THREADS" -S 2 2>&1 | tee "$RUN_LOG"; then
         test_status=0
     else
         test_status=$?
