@@ -5,3 +5,8 @@
 /dnsperf-results/
 __pycache__/
 *.bak.*
+/.env
+/storage/
+/public/storage/
+/.phpunit.cache/
+/.codex/

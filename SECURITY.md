@@ -1,6 +1,18 @@
 # Keamanan
 
-Script instalasi dan uninstalasi mengubah paket, konfigurasi DNS, resolver host, dan aturan UFW. Baca ringkasan yang tampil sebelum melanjutkan. Simpan cadangan konfigurasi penting sebelum menjalankan script pada server yang sudah digunakan.
+## Unbound DNS Web Manager
+
+- Web installer menaruh document root di `/opt/unbound-web/public`. File kredensial berada di `/etc/unbound-web/.env`, di luar document root. Atur pemilik `root:www-data` dan mode `0640`.
+- Dashboard metrik dapat diakses publik. Halaman Settings dan semua perubahan sistem memerlukan login admin. Username dan password dibaca dari `.env`; tidak ada fungsi untuk mengubahnya dari web.
+- Virtual host bawaan menggunakan HTTP pada port `8000`. HTTP tidak mengenkripsi password. Pakai jaringan privat/VPN atau reverse proxy HTTPS sebelum membuka login dari Internet.
+- Sudoers hanya mengizinkan `www-data` menjalankan helper root `/usr/local/sbin/unbound-web-manage`. Helper hanya menerima aksi yang tercantum di dalam script; jangan memberi `www-data` hak sudo umum atau hak menulis ke helper.
+- URL blocklist harus HTTPS dan hostname-nya harus resolve ke alamat publik. Unduhan dipatok ke IP publik yang sudah divalidasi dan redirect tidak diikuti. Sumber blocklist tetap merupakan input admin; gunakan penyedia yang dipercaya.
+- Wizard mengganti resolver host sementara saat memeriksa port 53 dan koneksi DNS. State resolver ditulis ke direktori root-only; saat wizard gagal, file resolver dan status `systemd-resolved` sebelumnya dipulihkan.
+- Benchmark dnsperf hanya menerima alamat IPv4 private atau loopback dan durasi sampai 300 detik. Client/thread bisa menggunakan CPU server secara penuh. Jangan menargetkan server yang tidak dikelola.
+- UFW tidak diaktifkan otomatis. Jika diaktifkan dari web, pastikan aturan SSH telah dibuat agar sesi administrasi tidak terputus.
+- Metrik query dan trafik disimpan di MySQL selama 30 hari. Dashboard tidak menampilkan alamat IP klien atau query individual.
+
+Script CLI instalasi dan uninstalasi mengubah paket, konfigurasi DNS, resolver host, dan aturan UFW. Baca ringkasan yang tampil sebelum melanjutkan. Simpan cadangan konfigurasi penting sebelum menjalankan script pada server yang sudah digunakan.
 
 ## Pengaturan resolver
 

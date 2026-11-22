@@ -1,6 +1,92 @@
-# Instalasi Unbound DNS Server Interaktif
+# Unbound DNS Web Manager dan Tools CLI
 
-Installer Bash untuk menyiapkan Unbound DNS Resolver di Ubuntu Server dan Debian. Installer memeriksa spesifikasi host, memasang dependensi, membuat konfigurasi DNS, mengatur UFW, lalu menguji layanan.
+Repository ini menyediakan web manager untuk instalasi Unbound, pengaturan server, blocklist, Zabbix, firewall, dan monitoring. Tools CLI lama tetap tersedia.
+
+## Web Manager
+
+Web Manager memakai PHP Native 8.4, Nginx, MySQL, Tailwind CSS CDN, Font Awesome CDN, Chart.js, dan dnsperf. Dashboard publik memperbarui data tanpa reload. Perubahan server hanya tersedia setelah login admin.
+
+### Sistem yang didukung
+
+- Ubuntu Server 22.04 LTS (Jammy)
+- Arsitektur amd64 atau arm64
+- systemd, APT, akses root, dan koneksi Internet
+- Minimum 1 CPU, RAM 2 GB, ruang kosong 4 GB di `/var`
+
+Web Manager hanya mendukung Ubuntu 22.04. `install.sh` menambahkan PPA `ondrej/php` untuk PHP 8.4 dan repository MySQL Community 8.4 LTS. Paket yang dipasang mencakup `php8.4-fpm`, `php8.4-mysql`, `php8.4-cli`, `php8.4-curl`, `php8.4-mbstring`, `php8.4-xml`, Nginx, MySQL, Git, `dnsperf`, `dnsutils`, `curl`, OpenSSL, `build-essential`, `libssl-dev`, `libexpat1-dev`, `libevent-dev`, `bison`, dan `flex`. PHP Native tidak memerlukan Python. Zabbix Agent baru dipasang dari Settings.
+
+`install.sh` tidak memasang Unbound atau Zabbix Agent. Wizard mengunduh source Unbound terbaru dari NLnet Labs dan mengompilasinya. Agent Zabbix dipasang dari Settings.
+
+### Instalasi Web Manager
+
+Pada server baru, login sebagai `root`. Perbarui daftar paket dan pasang Git serta sertifikat CA sebelum clone:
+
+```bash
+apt-get update
+apt-get install -y git ca-certificates
+git clone https://github.com/ekiguistian/Interaktif_Install-Unbound.git
+cd Interaktif_Install-Unbound
+bash ./install.sh
+```
+
+Jalankan installer sebagai root. Script memverifikasi Ubuntu 22.04, CPU, RAM, dan ruang disk sebelum memasang dependensi. Installer membuat database, tabel, Nginx pada port `8000`, worker cron setiap menit, dan helper root dengan daftar aksi terbatas. Rule UFW untuk port 8000 ditambahkan, tetapi firewall tidak diaktifkan otomatis.
+
+Di akhir instalasi, script menampilkan alamat `DB_PASS` yang dibuat untuk MySQL serta isi `.env.example`. Buat konfigurasi aplikasi dan isi kredensial admin:
+
+```bash
+cp /opt/unbound-web/.env.example /etc/unbound-web/.env
+nano /etc/unbound-web/.env
+chown root:www-data /etc/unbound-web/.env
+chmod 0640 /etc/unbound-web/.env
+```
+
+Ganti `DB_PASS` dengan nilai yang dicetak installer. Isi `ADMIN_USER`, `ADMIN_PASS`, dan `NET_INTERFACE`. Gunakan password admin yang panjang dan jangan salin file `.env` ke document root. File konfigurasi disimpan di `/etc/unbound-web/.env`.
+
+Buka `http://IP-SERVER:8000`. URL aplikasi tidak memakai ekstensi `.php`; request langsung ke file `.php` diarahkan ke URL bersih dengan status 301. Dashboard publik tersedia tanpa login. Halaman Settings menggunakan kredensial dari `.env`.
+
+### Alur sistem
+
+1. `install.sh` memeriksa OS dan resource, memasang PHP, Nginx, MySQL, Git, dnsperf, serta build dependencies. Unbound dan Zabbix Agent tidak dipasang oleh script ini.
+2. Admin menyalin `.env.example` ke `/etc/unbound-web/.env`, lalu mengisi kredensial admin dan interface jaringan.
+3. Worker `bin/worker.php` berjalan setiap menit. Worker membaca `unbound-control stats_noreset`, counter Ethernet, dan resource server, lalu menyimpan riwayat selama 30 hari.
+4. Wizard menjalankan lima tahap: cek sistem dan port 53, unduh source NLnet Labs, kompilasi source, siapkan root hints/DNSSEC/control certificate dan service systemd, lalu uji DNS serta resolver lokal. Output proses dikirim lewat SSE. Jika tahap gagal, resolver dan status `systemd-resolved` sebelumnya dipulihkan.
+5. Unbound mulai sebagai recursive resolver dari root hints. DNSSEC aktif melalui trust anchor. TLD publik seperti `.id` di-resolve lewat hierarki DNS publik. Setelah uji query dan validasi DNSSEC berhasil, resolver host dialihkan ke `127.0.0.1`.
+6. Dashboard menampilkan status beserta versi Unbound, Zabbix Agent, jumlah query/reply, cache hit, QPS, tipe query, response code, waktu rekursi, CPU, load, RAM, disk, uptime, dan trafik Ethernet. Grafik menampilkan QPS, cache hit, dan trafik selama satu jam terakhir.
+7. Settings mengatur konfigurasi Unbound, blocklist/whitelist, Zabbix Agent, firewall UFW, jadwal cron, domain uji, dan dnsperf.
+
+Worker menulis log di `/var/log/unbound-web/worker.log`; hasil sinkronisasi blocklist dicatat di `/var/log/unbound-web/blocklist.log`. Logrotate menyimpan rotasi harian selama tujuh hari.
+
+### Modul Settings
+
+- **Konfigurasi Unbound**: interface, port, access-control, thread, cache size dan slabs, TTL, prefetch, dan hardening DNSSEC. Konfigurasi divalidasi dengan `unbound-checkconf` sebelum service di-reload. File aktif tersedia dalam tampilan read-only.
+- **Blocklist/whitelist**: tambah, ubah, aktifkan, nonaktifkan, dan hapus URL HTTPS atau domain whitelist. Parser mendukung hosts, Adblock `||domain^`, dan domain biasa. Download dipatok ke alamat IP publik yang sudah divalidasi, tanpa mengikuti redirect. Update memfilter whitelist, memvalidasi konfigurasi, lalu reload Unbound.
+- **Zabbix Agent**: pasang Agent 2 jika tersedia, atau Agent klasik. Isi `Server`, `ServerActive`, dan `Hostname`; lihat status, ubah konfigurasi, serta jalankan start/restart/stop.
+- **Firewall**: lihat rule UFW, tambah/hapus rule incoming TCP/UDP, batasi sumber ke IP/CIDR, atau aktifkan UFW. UFW tidak diaktifkan otomatis. Pastikan rule SSH tersedia sebelum mengaktifkannya.
+- **Jadwal cron**: lihat job aplikasi, pilih interval blocklist, tambah/ubah/hapus jadwal root hints atau sinkronisasi blocklist. Perintah custom dibatasi ke tugas internal.
+- **dnsperf**: atur target IPv4 private atau loopback, port, durasi maksimal 300 detik, client, thread, dan QPS. Nilai QPS `0` berarti tanpa batas QPS. Hasil tampil langsung melalui SSE.
+- **Domain pengujian**: CRUD domain dan tipe query `A`, `AAAA`, `MX`, `TXT`, `NS`, atau `CNAME`. Installer menambahkan 100 domain umum sebagai awal.
+
+### Keamanan Web Manager
+
+Dashboard publik hanya membaca metrik. Login admin memakai username dan password dari `.env`; tidak ada menu untuk mengubah kredensial. Session memakai cookie HttpOnly dan SameSite Strict, formulir menggunakan token CSRF, login dibatasi, database memakai PDO prepared statements, dan nilai yang digunakan oleh shell divalidasi serta di-escape dengan `escapeshellarg()`.
+
+`www-data` tidak diberi sudo umum untuk menjalankan command arbitrer. Sudoers hanya mengizinkan `/usr/local/sbin/unbound-web-manage`; helper root memeriksa daftar aksi dan setiap argumennya sebelum memakai APT, systemd, Unbound, UFW, atau cron. File aplikasi dimiliki root dan tidak dapat ditulis oleh Nginx.
+
+Nginx bawaan memakai HTTP pada port `8000`. Untuk penggunaan di jaringan produksi, batasi akses dengan firewall/VPN atau pasang reverse proxy HTTPS sebelum memasukkan password admin. Tailwind CSS, Font Awesome, dan Chart.js dimuat dari CDN sehingga browser perlu akses Internet untuk tampilan lengkap.
+
+### Push ke GitHub
+
+Repository Git sudah digunakan pada workspace ini. Setelah membuat repository GitHub kosong, push branch `main` memakai script berikut:
+
+```bash
+bash scripts/push-github.sh https://github.com/OWNER/NAMA-REPOSITORY.git
+```
+
+Script memeriksa URL GitHub, menambahkan perubahan, membuat commit bila ada file berubah, lalu menjalankan `git push -u`. Jangan masukkan token ke URL remote; gunakan SSH agent atau credential manager Git.
+
+## Tools CLI
+
+Contoh IP LAN memakai jaringan private `192.168.1.0/24`. Contoh domain menggunakan `yourdomain.com`; ganti dengan jaringan dan domain milik sendiri.
 
 Contoh IP LAN menggunakan jaringan privat kelas C `192.168.1.0/24`. Nama domain contoh menggunakan `yourdomain.com`; ganti keduanya dengan jaringan dan domain milik sendiri sebelum dipakai.
 
@@ -8,17 +94,17 @@ Repository ini menyediakan tiga script:
 
 | Script | Fungsi |
 | --- | --- |
-| `Install.sh` | Instalasi interaktif Unbound DNS Server. |
+| `Install-cli.sh` | Instalasi interaktif Unbound DNS Server melalui terminal. |
 | `Uninstall.sh` | Uninstalasi Interaktif - Clear OS. Menghapus stack Unbound/Zabbix/dnsperf. UFW di-reset dan dinonaktifkan. |
 | `Tes.sh` | Pasang dnsperf bila belum tersedia lalu uji resolver lokal dengan 100 domain. |
 
-## Tampilan terminal
+## Tampilan terminal CLI
 
 Ketiga script membersihkan layar saat berjalan di terminal interaktif, lalu menampilkan nama OS, versi kernel, dan arsitektur server. Informasi berwarna hijau, proses berwarna biru, dan peringatan atau error berwarna merah. Proses yang lama menampilkan indikator jam pasir. Warna dan pembersihan layar tidak dipakai saat script berjalan tanpa terminal. Setel `NO_COLOR=1` untuk menonaktifkan warna tanpa mematikan indikator jam pasir atau pembersihan layar. File konfigurasi Unbound dan ringkasan hasil dnsperf tetap berupa teks biasa.
 
-## Alur penggunaan
+## Alur penggunaan CLI
 
-1. Jalankan `Install.sh` untuk memeriksa OS dan resource, memasang dependensi yang kurang, lalu mengatur resolver, firewall, blocklist/whitelist, dan Zabbix dari pilihan interaktif. Installer meminta konfirmasi ringkasan sebelum menerapkan konfigurasi dan menjalankan pemeriksaan DNS serta DNSSEC setelah pemasangan.
+1. Jalankan `Install-cli.sh` untuk memeriksa OS dan resource, memasang dependensi yang kurang, lalu mengatur resolver, firewall, blocklist/whitelist, dan Zabbix dari pilihan interaktif. Installer meminta konfirmasi ringkasan sebelum menerapkan konfigurasi dan menjalankan pemeriksaan DNS serta DNSSEC setelah pemasangan.
 2. Jalankan `Tes.sh` di server untuk memeriksa DNS lokal, memanaskan cache, lalu mengukur resolver dengan dnsperf. Hasil pengujian dan ringkasan disimpan di `dnsperf-results/`.
 3. Jika ingin menghapus stack yang dipasang, jalankan `Uninstall.sh`. Script menampilkan rencana penghapusan, meminta konfirmasi `HAPUS`, menjalankan tahap uninstall, lalu melaporkan hasil sistem.
 
@@ -56,8 +142,8 @@ Clone repository, lalu jalankan installer:
 ```bash
 git clone https://github.com/ekiguistian/Interaktif_Install-Unbound.git
 cd Interaktif_Install-Unbound
-chmod +x Install.sh
-./Install.sh
+chmod +x Install-cli.sh
+./Install-cli.sh
 ```
 
 Jalankan `git clone` dan installer sebagai akun yang memiliki hak sudo, atau lanjutkan sebagai `root`. Installer memeriksa dependensi terlebih dahulu. Jika semuanya sudah tersedia, APT tidak diperbarui dan paket tidak dipasang ulang. Jika ada yang kurang, installer menjalankan `apt-get update` lalu memasang paket yang belum tersedia.
