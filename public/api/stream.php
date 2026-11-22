@@ -11,7 +11,7 @@ $args=['/usr/bin/sudo','-n','/usr/local/sbin/unbound-web-manage'];
 switch ($task) {
     case 'wizard':
         $step=filter_var($payload['step']??null,FILTER_VALIDATE_INT);
-        if ($step===false || $step<1 || $step>5) json_response(['ok'=>false,'message'=>'Tahap wizard tidak valid.'],422);
+        if ($step===false || $step<1 || $step>2) json_response(['ok'=>false,'message'=>'Tahap wizard tidak valid.'],422);
         $args[]='wizard-step-' . $step;
         break;
     case 'blocklist-sync':

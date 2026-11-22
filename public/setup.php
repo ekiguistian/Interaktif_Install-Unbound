@@ -6,16 +6,16 @@ $loggedIn = admin_logged_in();
 ?>
 <section class="mx-auto max-w-4xl">
   <div class="panel p-6 sm:p-8">
-    <div class="flex flex-wrap items-start justify-between gap-5"><div><span class="text-xs font-semibold uppercase tracking-[.2em] text-cyan-300">Setup Wizard</span><h2 class="mt-2 text-xl font-semibold">Siapkan resolver secara bertahap</h2><p class="mt-2 max-w-2xl text-sm leading-6 text-slate-400">Setiap langkah menampilkan output dari server. Konfigurasi dasar hanya menerima query dari localhost sampai subnet diizinkan dari Settings.</p></div><span class="rounded-lg border border-amber-400/25 bg-amber-400/10 px-3 py-2 text-xs text-amber-200">Akses admin</span></div>
+    <div class="flex flex-wrap items-start justify-between gap-5"><div><span class="text-xs font-semibold uppercase tracking-[.2em] text-cyan-300">Setup Wizard</span><h2 class="mt-2 text-xl font-semibold">Periksa dan jalankan Unbound</h2><p class="mt-2 max-w-2xl text-sm leading-6 text-slate-400">Paket Unbound dipasang oleh <code>install.sh</code>. Wizard hanya memeriksa paket, memvalidasi konfigurasi bawaan, dan menjalankan service Ubuntu. Mode resolver, upstream, DNSSEC, root hints, dan pengujian tersedia di Settings.</p></div><span class="rounded-lg border border-amber-400/25 bg-amber-400/10 px-3 py-2 text-xs text-amber-200">Akses admin</span></div>
     <?php if (!$loggedIn): ?>
-      <div class="mt-6 rounded-xl border border-amber-400/25 bg-amber-400/10 p-4 text-sm text-amber-100">Login diperlukan sebelum source Unbound dikompilasi atau konfigurasi DNS diubah. <a class="font-semibold underline" href="/login?next=%2Fwizard">Login admin</a></div>
+      <div class="mt-6 rounded-xl border border-amber-400/25 bg-amber-400/10 p-4 text-sm text-amber-100">Login diperlukan sebelum pemeriksaan service atau konfigurasi DNS dijalankan. <a class="font-semibold underline" href="/login?next=%2Fwizard">Login admin</a></div>
     <?php else: ?>
-      <form class="mt-6" data-stream="app-update" data-output="#wizard-update-output" data-confirm="Tarik dan pasang source terbaru dari branch main?">
+      <form class="mt-6" data-stream="app-update" data-output="#wizard-update-output" data-confirm="Tarik dan pasang rilis Web Manager terbaru dari branch main?">
         <button class="btn-secondary" type="submit"><i class="fa-solid fa-rotate" aria-hidden="true"></i>Check for Update</button>
       </form>
       <pre id="wizard-update-output" role="status" class="mt-3 max-h-48 overflow-auto rounded-xl border border-slate-700 bg-black/50 p-3 text-sm text-slate-300">Perbarui Web Manager sebelum melanjutkan wizard bila diperlukan.</pre>
-      <ol id="wizard-steps" class="mt-7 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-        <?php foreach (['Cek sistem dan DNS','Unduh source resmi','Kompilasi & install','Setup root hints, DNSSEC & service','Verifikasi DNS dan resolver'] as $index => $label): ?>
+      <ol id="wizard-steps" class="mt-7 grid gap-3 sm:grid-cols-2">
+        <?php foreach (['Cek paket & konfigurasi','Validasi & jalankan service'] as $index => $label): ?>
         <li class="rounded-xl border border-slate-700 bg-slate-900/70 p-3 text-sm"><span class="mb-2 grid h-7 w-7 place-items-center rounded-full bg-slate-800 text-cyan-200"><?= $index + 1 ?></span><?= e($label) ?></li>
         <?php endforeach; ?>
       </ol>

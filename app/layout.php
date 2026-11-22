@@ -7,6 +7,7 @@ function page_start(string $title, bool $admin = false, bool $liveMonitor = fals
 {
     $fullTitle = e($title) . ' | Unbound Web Manager';
     $csrfMeta = admin_logged_in() ? '<meta name="csrf-token" content="' . e(csrf_token()) . '">' : '';
+    $cssVersion = (string)(@filemtime(__DIR__ . '/../public/assets/app.css') ?: 1);
     echo <<<HTML
 <!doctype html>
 <html lang="id">
@@ -18,7 +19,7 @@ function page_start(string $title, bool $admin = false, bool $liveMonitor = fals
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-  <link rel="stylesheet" href="/assets/app.css">
+  <link rel="stylesheet" href="/assets/app.css?v=$cssVersion">
 </head>
 <body class="min-h-screen bg-slate-950 text-slate-100 antialiased">
 <div class="min-h-screen">
@@ -48,7 +49,7 @@ HTML;
         echo '<form method="post" action="/logout"><input type="hidden" name="csrf_token" value="' . e(csrf_token()) . '">';
         echo '<button type="submit" class="nav-link"><i class="fa-solid fa-arrow-right-from-bracket" aria-hidden="true"></i>Log Out</button></form></nav>';
     } elseif ($liveMonitor) {
-        $needsInstall = system_status()['unbound'] === 'not-installed';
+        $needsInstall = system_status()['unbound'] !== 'active';
         $destination = $needsInstall ? '/wizard' : '/settings';
         $label = $needsInstall ? 'Install Wizard' : 'Setting';
         $icon = $needsInstall ? 'fa-wand-magic-sparkles' : 'fa-sliders';
@@ -72,7 +73,8 @@ HTML;
 
 function page_end(): void
 {
-    echo '</main></div><script src="/assets/app.js" defer></script></body></html>';
+    $jsVersion = (string)(@filemtime(__DIR__ . '/../public/assets/app.js') ?: 1);
+    echo '</main></div><script src="/assets/app.js?v=' . e($jsVersion) . '" defer></script></body></html>';
 }
 
 function card(string $title, string $icon, string $body, string $href): void

@@ -26,7 +26,12 @@ try {
             $minTtl = filter_var($payload['cache_min_ttl'] ?? null, FILTER_VALIDATE_INT);
             $maxTtl = filter_var($payload['cache_max_ttl'] ?? null, FILTER_VALIDATE_INT);
             $slabs = filter_var($payload['cache_slabs'] ?? null, FILTER_VALIDATE_INT);
-            $harden = (string)($payload['harden_dnssec'] ?? '');
+            $dnssec = (string)($payload['dnssec'] ?? '');
+            $rootHints = (string)($payload['root_hints'] ?? '');
+            $upstreamMode = (string)($payload['upstream_mode'] ?? '');
+            $forwardersRaw = $payload['forwarders'] ?? '';
+            if (!is_string($forwardersRaw) || strlen($forwardersRaw) > 360) fail_validation('Daftar upstream terlalu panjang.');
+            $forwarders = array_values(array_unique(preg_split('/[\s,]+/', trim($forwardersRaw), -1, PREG_SPLIT_NO_EMPTY)));
             if (!$interfaces || count($interfaces) > 8) fail_validation('Masukkan 1 sampai 8 alamat interface.');
             foreach ($interfaces as $ip) if (filter_var($ip, FILTER_VALIDATE_IP) === false) fail_validation('Alamat interface tidak valid.');
             if (!$acls || count($acls) > 32) fail_validation('Masukkan 1 sampai 32 jaringan access-control.');
@@ -37,8 +42,14 @@ try {
             if (!in_array($prefetch, ['yes','no'], true)) fail_validation('Nilai prefetch hanya yes atau no.');
             if ($minTtl === false || $minTtl < 1 || $minTtl > 86400 || $maxTtl === false || $maxTtl < $minTtl || $maxTtl > 604800) fail_validation('Rentang cache TTL tidak valid.');
             if ($slabs === false || $slabs < 1 || $slabs > 256 || ($slabs & ($slabs - 1)) !== 0) fail_validation('Cache slabs harus bernilai pangkat dua sampai 256.');
-            if (!in_array($harden, ['yes','no'], true)) fail_validation('Nilai harden-dnssec-stripped hanya yes atau no.');
-            $result = CommandRunner::run(['/usr/bin/sudo','-n','/usr/local/sbin/unbound-web-manage','apply-config',implode(',', $interfaces),(string)$port,implode(',', $acls),(string)$threads,$msg,$rrset,$prefetch,(string)$minTtl,(string)$maxTtl,(string)$slabs,$harden], 60);
+            if (!in_array($dnssec, ['yes','no'], true) || !in_array($rootHints, ['yes','no'], true)) fail_validation('Pilihan DNSSEC atau root hints tidak valid.');
+            if (!in_array($upstreamMode, ['root','forward','both'], true)) fail_validation('Mode resolver tidak valid.');
+            if (count($forwarders) > 8) fail_validation('Alamat upstream maksimal delapan.');
+            foreach ($forwarders as $forwarder) if (filter_var($forwarder, FILTER_VALIDATE_IP) === false) fail_validation('Alamat upstream harus berupa IPv4 atau IPv6.');
+            if (in_array($upstreamMode, ['forward','both'], true) && !$forwarders) fail_validation('Mode Forwarder atau Gabungan memerlukan alamat upstream.');
+            if ($upstreamMode === 'forward' && $rootHints === 'yes') fail_validation('Root hints hanya digunakan pada mode Root atau Gabungan.');
+            if ($upstreamMode === 'root') $forwarders = [];
+            $result = CommandRunner::run(['/usr/bin/sudo','-n','/usr/local/sbin/unbound-web-manage','apply-config',implode(',', $interfaces),(string)$port,implode(',', $acls),(string)$threads,$msg,$rrset,$prefetch,(string)$minTtl,(string)$maxTtl,(string)$slabs,$dnssec,$rootHints,$upstreamMode,implode(',', $forwarders)], 120);
             json_response(['ok' => $result['code'] === 0, 'message' => trim($result['output']) ?: 'Konfigurasi diproses.', 'code' => $result['code']], $result['code'] === 0 ? 200 : 422);
 
         case 'config-view':
@@ -67,6 +78,14 @@ try {
             }
             $result = CommandRunner::run(['/usr/bin/sudo', '-n', '/usr/local/sbin/unbound-web-manage', 'unbound-logging-set', $queries, $replies], 45);
             json_response(['ok' => $result['code'] === 0, 'message' => trim($result['output'])], $result['code'] === 0 ? 200 : 422);
+
+        case 'resolver-verify':
+            $result = CommandRunner::run(['/usr/bin/sudo', '-n', '/usr/local/sbin/unbound-web-manage', 'resolver-verify'], 45);
+            json_response(['ok' => $result['code'] === 0, 'message' => trim($result['output']) ?: 'Pemeriksaan selesai.'], $result['code'] === 0 ? 200 : 422);
+
+        case 'root-hints-update':
+            $result = CommandRunner::run(['/usr/bin/sudo', '-n', '/usr/local/sbin/unbound-web-manage', 'update-root-hints'], 60);
+            json_response(['ok' => $result['code'] === 0, 'message' => trim($result['output']) ?: 'Root hints diperbarui.'], $result['code'] === 0 ? 200 : 422);
 
         case 'blocklist-add':
             $name = trim((string)($payload['name'] ?? ''));

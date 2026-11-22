@@ -15,7 +15,7 @@ page_start('Ringkasan server', true);
 <section class="panel mt-5 p-5">
   <h2 class="font-semibold">Pembaruan Web Manager</h2>
   <p class="mt-2 text-sm text-slate-400">Tarik versi branch main, pasang file aplikasi, lalu periksa versi yang dilayani Nginx.</p>
-  <form class="mt-4" data-stream="app-update" data-output="#app-update-output" data-confirm="Tarik dan pasang source terbaru dari branch main?">
+  <form class="mt-4" data-stream="app-update" data-output="#app-update-output" data-confirm="Tarik dan pasang rilis Web Manager terbaru dari branch main?">
     <button class="btn-primary" type="submit"><i class="fa-solid fa-rotate" aria-hidden="true"></i>Check for Update</button>
   </form>
   <pre id="app-update-output" role="status" class="mt-4 max-h-64 overflow-auto rounded-xl border border-slate-700 bg-black/50 p-4 text-sm text-slate-300">Menunggu pemeriksaan.</pre>

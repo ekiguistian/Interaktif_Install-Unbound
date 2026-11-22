@@ -102,7 +102,7 @@ web_check_deployed() {
     local url='http://127.0.0.1:8000' headers served trial
     nginx -t
     php-fpm8.4 -t
-    cmp -s -- "$WEB_HELPER" "$WEB_APP_DIR/scripts/manage.sh" || die 'Helper terpasang tidak cocok dengan source web.'
+    cmp -s -- "$WEB_HELPER" "$WEB_APP_DIR/scripts/manage.sh" || die 'Helper terpasang tidak cocok dengan rilis web.'
     sudo -u www-data /usr/bin/sudo -n "$WEB_HELPER" service-status >/dev/null ||
         die 'Aplikasi tidak dapat menjalankan helper sistem.'
     curl -fsS --noproxy '*' --max-time 10 "$url/login" -o /dev/null || die 'Halaman login gagal dibuka.'

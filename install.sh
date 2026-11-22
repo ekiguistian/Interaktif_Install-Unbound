@@ -127,7 +127,16 @@ prepare_legacy_mysql_source
 step 'Memperbarui indeks APT dan memasang alat dasar.'
 export DEBIAN_FRONTEND=noninteractive
 apt-get update --allow-releaseinfo-change-label
-apt-get install -y --no-install-recommends ca-certificates curl iproute2 openssl software-properties-common
+base_packages=(ca-certificates curl iproute2 openssl software-properties-common)
+missing_base_packages=()
+for package in "${base_packages[@]}"; do
+    [[ "$(dpkg-query -W -f='${db:Status-Status}' "$package" 2>/dev/null || true)" == installed ]] || missing_base_packages+=("$package")
+done
+if ((${#missing_base_packages[@]})); then
+    apt-get install -y --no-install-recommends "${missing_base_packages[@]}"
+else
+    info 'Semua alat dasar sudah terpasang; pemasangan APT dilewati.'
+fi
 
 if ! apt-cache show dnsperf >/dev/null 2>&1; then
     add-apt-repository --yes universe
@@ -154,12 +163,41 @@ if ! grep -qsE '^[[:space:]]*(deb[[:space:]]|URIs:).*https://packages\.sury\.org
 fi
 apt-cache show php8.4-fpm >/dev/null 2>&1 || die 'Paket PHP 8.4 tidak tersedia dari repository yang aktif.'
 
-step 'Memasang PHP 8.4, Nginx, MySQL Server, dnsperf, Git, dan build dependencies Unbound.'
-packages=(php8.4-fpm php8.4-mysql php8.4-cli php8.4-curl php8.4-mbstring php8.4-xml dnsperf dnsutils nginx ufw sudo cron git)
+normalize_unbound_control_files() {
+    id unbound >/dev/null 2>&1 || return 0
+    local -a files=()
+    shopt -s nullglob
+    files=(/etc/unbound/unbound_*.key /etc/unbound/unbound_*.pem)
+    shopt -u nullglob
+    ((${#files[@]})) || return 0
+    chown unbound:unbound "${files[@]}"
+    chmod 0640 "${files[@]}"
+}
+
+step 'Memasang PHP 8.4, Nginx, MySQL Server, Unbound, dnsperf, Git, dan dependensi Web Manager.'
+packages=(php8.4-fpm php8.4-mysql php8.4-cli php8.4-curl php8.4-mbstring php8.4-xml dnsperf dnsutils nginx ufw sudo cron git unbound unbound-anchor)
 packages+=(logrotate)
-packages+=(build-essential pkg-config libssl-dev libexpat1-dev libevent-dev bison flex wget)
 [[ "$MYSQL_SERVER_PRESENT" == yes ]] || packages+=(mysql-server)
-apt-get install -y --no-install-recommends "${packages[@]}"
+normalize_unbound_control_files
+missing_packages=()
+for package in "${packages[@]}"; do
+    [[ "$(dpkg-query -W -f='${db:Status-Status}' "$package" 2>/dev/null || true)" == installed ]] || missing_packages+=("$package")
+done
+if ((${#missing_packages[@]})); then
+    apt-get install -y --no-install-recommends "${missing_packages[@]}"
+else
+    info 'Semua paket aplikasi sudah terpasang; pemasangan APT dilewati.'
+fi
+normalize_unbound_control_files
+for unbound_tool in unbound unbound-checkconf unbound-control unbound-control-setup unbound-anchor; do
+    [[ -x "/usr/sbin/$unbound_tool" ]] || die "Tool paket Unbound tidak tersedia: /usr/sbin/$unbound_tool"
+done
+/usr/sbin/unbound-checkconf /etc/unbound/unbound.conf || die 'Konfigurasi paket Unbound tidak valid.'
+systemctl enable unbound >/dev/null
+if ! systemctl is-active --quiet unbound; then
+    systemctl reset-failed unbound >/dev/null 2>&1 || true
+    systemctl start unbound || die 'Service Unbound bawaan Ubuntu gagal dijalankan.'
+fi
 if systemd-detect-virt --quiet --container && ! iptables -t filter -S >/dev/null 2>&1; then
     info 'Container tidak memiliki akses netfilter. Gunakan firewall Proxmox atau host untuk port 8000.'
 else
@@ -169,7 +207,7 @@ fi
 php8.4 -r 'exit(PHP_VERSION_ID >= 80400 && extension_loaded("pdo_mysql") && extension_loaded("curl") && extension_loaded("mbstring") && extension_loaded("xml") ? 0 : 1);' || die 'PHP 8.4 atau extension wajib belum siap.'
 command -v dnsperf >/dev/null 2>&1 || die 'dnsperf belum tersedia setelah pemasangan.'
 
-step 'Menyiapkan source dan rilis Web Manager dari GitHub.'
+step 'Menyiapkan checkout dan rilis Web Manager dari GitHub.'
 web_pull_main
 web_stage_release
 
@@ -336,7 +374,7 @@ if [[ "$use_ufw" == yes ]]; then systemctl enable --now ufw; fi
 systemctl reload nginx
 
 step 'Menjalankan pemeriksaan akhir.'
-units=(mysql php8.4-fpm nginx cron logrotate.timer)
+units=(mysql php8.4-fpm nginx cron logrotate.timer unbound)
 if [[ "$use_ufw" == yes ]]; then units+=(ufw); fi
 for unit in "${units[@]}"; do
     systemctl is-enabled --quiet "$unit" && systemctl is-active --quiet "$unit" ||

@@ -37,7 +37,19 @@
       const button = form.querySelector('[type="submit"]');
       const output = document.querySelector(form.dataset.output || '[data-stream-output]');
       let wizardCompleted = false;
-      if (button) { button.disabled = true; button.dataset.oldText = button.innerHTML; button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Berjalan'; }
+      const isWizard = form.dataset.stream === 'wizard';
+      const wizardButtonText = isWizard ? form.querySelector('[data-wizard-button]') : null;
+      const wizardStepInput = isWizard ? form.querySelector('[data-wizard-step]') : null;
+      const wizardTotalSteps = isWizard ? document.querySelectorAll('#wizard-steps li').length : 0;
+      if (button) {
+        button.disabled = true;
+        if (isWizard) {
+          if (wizardButtonText) wizardButtonText.textContent = 'Berjalan';
+        } else {
+          button.dataset.oldText = button.innerHTML;
+          button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Berjalan';
+        }
+      }
       if (output) { output.textContent = ''; output.classList.remove('text-rose-300'); }
       try {
         const payload = Object.fromEntries(new FormData(form).entries());
@@ -50,6 +62,7 @@
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
+        let streamExitCode = null;
         while (true) {
           const {value, done} = await reader.read();
           if (done) break;
@@ -63,43 +76,46 @@
             try {
               const eventData = JSON.parse(data);
               if (output && typeof eventData.output === 'string') output.textContent += eventData.output;
-              if (output && eventData.done) output.textContent += eventData.exitCode === 0 ? '\n[SELESAI:0]\n' : '\n[PROSES GAGAL:' + eventData.exitCode + ']\n';
+              if (eventData.done === true) {
+                streamExitCode = Number(eventData.exitCode);
+                if (output) output.textContent += streamExitCode === 0 ? '\n[SELESAI:0]\n' : '\n[PROSES GAGAL:' + streamExitCode + ']\n';
+              }
               if (output) output.scrollTop = output.scrollHeight;
             } catch (_) {
               if (output) output.textContent += data;
             }
           }
         }
+        if (streamExitCode === null || !Number.isInteger(streamExitCode)) {
+          throw new Error('Streaming berakhir tanpa status akhir dari server.');
+        }
         if (output && /\[PROSES GAGAL:/.test(output.textContent)) output.classList.add('text-rose-300');
-        if (form.dataset.stream === 'wizard' && output) {
-          const finished = output.textContent.match(/\[SELESAI:(\d+)\]/);
-          if (finished && finished[1] === '0') {
-            const stepInput = form.querySelector('[data-wizard-step]');
-            const nextStep = Number(stepInput.value) + 1;
-            const buttonText = form.querySelector('[data-wizard-button]');
+        if (isWizard) {
+          const currentStep = Number(wizardStepInput?.value);
+          if (streamExitCode === 0 && Number.isInteger(currentStep) && currentStep >= 1 && currentStep <= wizardTotalSteps) {
+            const nextStep = currentStep + 1;
             document.querySelectorAll('#wizard-steps li').forEach((item, index) => {
-              if (index < Number(stepInput.value)) item.classList.add('border-emerald-400/40','text-emerald-200');
+              if (index < currentStep) item.classList.add('border-emerald-400/40','text-emerald-200');
             });
-            if (nextStep <= 5) {
-              stepInput.value = String(nextStep);
-              if (buttonText) buttonText.textContent = 'Jalankan tahap ' + nextStep;
+            if (nextStep <= wizardTotalSteps) {
+              wizardStepInput.value = String(nextStep);
+              if (wizardButtonText) wizardButtonText.textContent = 'Jalankan tahap ' + nextStep;
             } else {
               wizardCompleted = true;
-              if (button) button.disabled = true;
-              if (buttonText) buttonText.textContent = 'Instalasi selesai';
+              if (wizardButtonText) wizardButtonText.textContent = 'Instalasi selesai';
             }
-          } else if (form.dataset.stream === 'wizard') {
-            const stepInput = form.querySelector('[data-wizard-step]');
-            const buttonText = form.querySelector('[data-wizard-button]');
-            if (stepInput) stepInput.value = '1';
-            document.querySelectorAll('#wizard-steps li').forEach((item) => item.classList.remove('border-emerald-400/40','text-emerald-200'));
-            if (buttonText) buttonText.textContent = 'Ulangi dari tahap 1';
+          } else if (wizardButtonText) {
+            wizardButtonText.textContent = 'Ulangi tahap ' + (wizardStepInput?.value || '1');
           }
         }
       } catch (error) {
         if (output) { output.textContent += '\n' + error.message; output.classList.add('text-rose-300'); }
+        if (isWizard && wizardButtonText) wizardButtonText.textContent = 'Ulangi tahap ' + (wizardStepInput?.value || '1');
       } finally {
-        if (button) { button.disabled = wizardCompleted; button.innerHTML = button.dataset.oldText; }
+        if (button) {
+          button.disabled = wizardCompleted;
+          if (!isWizard) button.innerHTML = button.dataset.oldText;
+        }
       }
     });
   });
@@ -134,10 +150,10 @@
       const action = document.getElementById('main-action');
       const actionText = document.getElementById('main-action-text');
       if (action && actionText) {
-        const installed = payload.services.unbound !== 'not-installed';
-        action.href = installed ? '/settings' : '/wizard';
-        actionText.textContent = installed ? 'Setting' : 'Install Wizard';
-        action.querySelector('i').className = installed ? 'fa-solid fa-sliders' : 'fa-solid fa-wand-magic-sparkles';
+        const running = payload.services.unbound === 'active';
+        action.href = running ? '/settings' : '/wizard';
+        actionText.textContent = running ? 'Setting' : 'Install Wizard';
+        action.querySelector('i').className = running ? 'fa-solid fa-sliders' : 'fa-solid fa-wand-magic-sparkles';
       }
       setText('unbound-version', payload.services.unbound_version ? 'Versi ' + payload.services.unbound_version : 'Versi belum tersedia');
       const latest = payload.latest || {};

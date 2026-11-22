@@ -9,7 +9,7 @@ Pasang dan kelola resolver DNS Unbound dari browser. Web Manager menyediakan wiz
 - Akun dengan akses sudo atau root, koneksi Internet, dan port TCP 8000 yang tersedia.
 - MySQL berjalan di server yang sama. Installer memasangnya jika belum tersedia.
 
-Installer memasang Nginx, PHP 8.4 dan ekstensi yang dipakai aplikasi, MySQL, UFW, cron, logrotate, dnsperf, serta dependensi kompilasi Unbound. [Repository PHP Surý](https://packages.sury.org/php/README.txt) · [Paket MySQL Ubuntu Jammy](https://packages.ubuntu.com/jammy/mysql-server)
+Installer memasang paket Unbound Ubuntu, Nginx, PHP 8.4 dan ekstensi aplikasi, MySQL, UFW, cron, logrotate, serta dnsperf. Service Unbound tetap memakai unit dan binary bawaan paket Ubuntu. [Repository PHP Surý](https://packages.sury.org/php/README.txt) · [Paket MySQL Ubuntu Jammy](https://packages.ubuntu.com/jammy/mysql-server) · [Dokumentasi resmi Unbound](https://unbound.docs.nlnetlabs.nl/en/latest/)
 
 ## Instalasi dari OS kosong
 
@@ -57,29 +57,33 @@ Password : <password admin yang dibuat installer>
 
 Gunakan URL yang dicetak installer. Simpan username dan password admin dengan aman.
 
-### 4. Pasang Unbound dari browser
+### 4. Periksa Unbound dari browser
 
-1. Buka URL Web Manager, pilih **Install Wizard**, lalu login sebagai admin.
-2. Jalankan setiap tahap secara berurutan. Wizard memeriksa port 53 dan DNS Internet, mengunduh source, mengompilasi Unbound, memasang root hints dan DNSSEC, lalu menguji resolver.
-3. Setelah tahap terakhir berhasil, buka kembali **Live Monitor**. Status Unbound akan tampil aktif dan menu berubah menjadi **Setting**. Worker mencatat data setiap menit.
+1. Buka URL Web Manager. Jika status Unbound sudah `active`, lanjutkan langsung ke **Setting**.
+2. Jika service belum aktif, pilih **Install Wizard**, login sebagai admin, lalu jalankan dua tahap secara berurutan. Wizard memeriksa tool paket dan konfigurasi, kemudian menjalankan service bawaan Ubuntu. Jika paket belum lengkap, jalankan kembali `install.sh`; wizard tidak memasang atau mengompilasi Unbound.
+3. Setelah tahap terakhir berhasil, buka kembali **Live Monitor**. Menu berubah menjadi **Setting** dan worker mencatat data setiap menit.
 
 ### 5. Periksa DNS dari server
 
 ```bash
 systemctl is-active nginx php8.4-fpm mysql cron unbound
 curl -fsS http://127.0.0.1:8000/api/metrics
-dig @127.0.0.1 nlnetlabs.nl A +dnssec
+dig @127.0.0.1 nlnetlabs.nl A
 ```
 
-Service harus berstatus `active`, API harus mengembalikan `"ok":true`, dan hasil `dig` harus menampilkan `NOERROR` serta flag `ad`.
+Service harus berstatus `active`, API harus mengembalikan `"ok":true`, dan hasil `dig` harus menampilkan `NOERROR`.
 
 Wizard mempertahankan `/etc/resolv.conf` pada VM dan LXC. Unbound dapat langsung diuji di `127.0.0.1:53`.
 
-### 6. Atur IP DNS setelah instalasi
+### 6. Atur mode resolver, DNSSEC, dan root hints
+
+Buka **Setting → Unbound**. Pilih **Root langsung**, **Forwarder saja**, atau **Forwarder lalu Root**. Mode forwarder menerima hingga delapan alamat upstream IPv4 atau IPv6. Aktifkan DNSSEC dan file root hints InterNIC bila diperlukan, simpan konfigurasi, lalu pilih **Verifikasi DNS & resolver**. Pemeriksaan DNSSEC juga memastikan flag `ad` tersedia ketika DNSSEC aktif.
+
+### 7. Atur IP DNS setelah instalasi
 
 Buka **Setting → Unbound → DNS sistem** untuk mengganti atau menambah hingga tiga alamat DNS yang dipakai Ubuntu. Isi satu IP per baris. Masukkan `127.0.0.1` jika ingin Ubuntu memakai Unbound lokal. Jika file hanya bisa dibaca atau dipasang oleh host, alamat ditampilkan dalam mode baca saja. Ubah DNS melalui Proxmox atau pengelola host.
 
-### 7. Hubungkan klien LAN dan monitoring bila diperlukan
+### 8. Hubungkan klien LAN dan monitoring bila diperlukan
 
 1. Untuk melayani klien LAN, buka **Setting → Unbound**. Tambahkan IP LAN server, misalnya `192.168.1.2`, dan subnet klien, misalnya `192.168.1.0/24`, sambil mempertahankan interface dan ACL loopback. Validasi dan terapkan konfigurasi.
 2. Jika memakai UFW, buka **Firewall**. Pastikan akses SSH dan TCP 8000 dari jaringan admin tersedia. Tambahkan **Allow IN** untuk TCP dan UDP port 53 dari subnet klien. Jika LXC tidak punya akses netfilter, buat aturan tersebut di firewall Proxmox atau host.
@@ -92,20 +96,18 @@ Buka **Setting → Unbound → DNS sistem** untuk mengganti atau menambah hingga
 flowchart TD
     A["Pasang Ubuntu Server 22.04 LTS dan siapkan jaringan"] --> B["APT update dan upgrade, lalu instal Git"]
     B --> C["Clone repo dan jalankan install.sh"]
-    C --> D["Pasang dependensi, buat database dan .env, aktifkan layanan"]
+    C --> D["Pasang paket Unbound dan aplikasi, buat database dan .env, aktifkan layanan"]
     D --> E{"Halaman web dan database siap?"}
     E -->|Tidak| F["Installer menampilkan kesalahan"]
     E -->|Ya| G["Tampilkan URL, Username, dan Password"]
     G --> H["Live Monitor publik"]
-    H --> I{"Unbound sudah terpasang?"}
+    H --> I{"Service Unbound aktif?"}
     I -->|Belum| J["Install Wizard dan login admin"]
-    J --> K["Siapkan resolver, kompilasi Unbound, pasang root hints dan DNSSEC"]
-    K --> L{"Uji DNS dan DNSSEC lulus?"}
-    L -->|Tidak| M["Tampilkan kesalahan tanpa mengubah DNS sistem"]
-    L -->|Ya| N["Unbound aktif di loopback, DNS sistem tetap"]
-    N --> O["Buka Setting untuk mengatur IP DNS bila diperlukan"]
+    J --> K{"Paket dan konfigurasi valid?"}
+    K -->|Belum| L["Jalankan kembali install.sh dari terminal"]
+    K -->|Sudah| O["Jalankan service bawaan Ubuntu"]
     I -->|Sudah| O
-    O --> P["Unbound, Zabbix Agent, dan Firewall"]
+    O --> P["Atur mode resolver, upstream, DNSSEC, root hints, Zabbix, dan Firewall"]
     P --> Q["Worker merekam metrik setiap menit"]
     Q --> H
 ```
@@ -115,8 +117,8 @@ flowchart TD
 | Menu | Fungsi |
 | --- | --- |
 | **Live Monitor** | Status dan versi Unbound, status Zabbix, query dan reply, QPS, cache hit, tipe query, kode respons, waktu rekursi, trafik jaringan, CPU, RAM, disk, dan uptime. Grafik menampilkan data satu jam terakhir. |
-| **Install Wizard** | Kompilasi Unbound dari source NLnet Labs, pemasangan root hints, DNSSEC, sertifikat control, unit systemd, dan pemeriksaan resolver. Output proses tampil langsung. |
-| **Unbound** | Atur interface DNS, ACL, cache, log, dan opsi DNSSEC. Baca `unbound.conf` dan kelola alamat DNS sistem setelah wizard selesai. |
+| **Install Wizard** | Periksa paket dan konfigurasi Unbound, lalu jalankan service bawaan Ubuntu. Pemasangan paket tetap ditangani `install.sh`. |
+| **Unbound** | Atur interface DNS, ACL, cache, mode Root/Forwarder/Gabungan, upstream, DNSSEC, root hints, log, verifikasi resolver, baca `unbound.conf`, dan kelola DNS sistem. |
 | **Blocklist dan Whitelist** | Kelola sumber HTTPS dan domain pengecualian. Mendukung format hosts, Adblock `\|\|domain^`, dan daftar domain biasa. Jalankan sinkronisasi langsung atau terjadwal. |
 | **Cron dan uji DNS** | Jadwalkan pembaruan root hints atau blocklist. Kelola domain uji dan jalankan dnsperf ke IP lokal atau privat hingga 300 detik dengan pilihan client, thread, dan QPS. |
 | **Zabbix Agent** | Pasang agent, atur `Server`, `ServerActive`, dan `Hostname`, lalu gunakan Enable, Disable, atau Restart. |
@@ -137,11 +139,20 @@ git pull --ff-only origin main && sudo bash ./update.sh
 
 Untuk pembaruan berikutnya, login sebagai admin dan pilih **Check for Update** di **Install Wizard** atau **Setting**. Tombol ini menjalankan updater yang sama seperti di terminal.
 
+Jika menjalankan updater dari terminal pada instalasi aktif, pindah dahulu ke direktori yang tidak diganti oleh deployment:
+
+```bash
+cd /
+sudo bash /opt/unbound-web/update.sh
+```
+
+Folder `/opt/unbound-web` adalah rilis aplikasi yang dipasang, bukan checkout Git untuk menjalankan `git pull`. Checkout updater dikelola otomatis di `/var/lib/unbound-web-updates/checkout`.
+
 `install.sh` memasang Git dan menyiapkan checkout milik root di `/var/lib/unbound-web-updates/checkout`. `update.sh` menarik branch `main` ke checkout tersebut, menempatkan seluruh file yang dilacak Git di `/opt/unbound-web`, lalu mengganti helper di `/usr/local/sbin/unbound-web-manage`. Nginx menyajikan folder `/opt/unbound-web/public`. Updater memeriksa commit lewat Nginx dan memulihkan file aplikasi serta helper sebelumnya jika pemeriksaan gagal. Pembaruan menjaga database dan konfigurasi di `/etc`.
 
 ## Yang perlu diperhatikan
 
-- **Port jaringan.** Pastikan TCP 8000 dapat dijangkau dari jaringan admin. Wizard membutuhkan port 53 pada alamat loopback dan akses DNS keluar. LXC perlu systemd dan jaringan yang mengizinkan layanan di dalam container.
+- **Port jaringan.** Pastikan TCP 8000 dapat dijangkau dari jaringan admin. Service Unbound membutuhkan port 53 pada alamat yang dikonfigurasi dan akses DNS keluar. LXC perlu systemd dan jaringan yang mengizinkan layanan di dalam container.
 - **Akses SSH.** Sebelum mengaktifkan UFW, pastikan aturan SSH dan port web sudah benar. Pada aturan IN, IP/CIDR adalah sumber. Pada aturan OUT, IP/CIDR adalah tujuan. Aturan lanjutan tampil dalam mode baca saja. Periksa urutan aturan setelah mengubah port, arah, protokol, atau alamat karena aturan pengganti ditambahkan di akhir.
 - **Pemeriksaan awal.** Jika halaman gagal dibuka, periksa `sudo nginx -t`, `sudo systemctl status nginx php8.4-fpm mysql`, dan hasil `curl -fsS http://127.0.0.1:8000/api/metrics` dari server.
 - **Aset browser.** Browser mengambil Tailwind CSS, Font Awesome, dan Chart.js dari CDN. Tampilan lengkap dan grafik memerlukan akses CDN.

@@ -3,10 +3,17 @@ set -Eeuo pipefail
 
 APP_DIR='/opt/unbound-web'
 CONF_FILE='/etc/unbound/unbound.conf'
+MANAGED_CONF='/etc/unbound/unbound.conf.d/50-unbound-web.conf'
 BLOCKLIST_CONF='/etc/unbound/unbound.conf.d/90-unbound-web-blocklist.conf'
 CRON_FILE='/etc/cron.d/unbound-web'
 CUSTOM_CRON_FILE='/etc/cron.d/unbound-web-managed'
 LOG_DIR='/var/log/unbound-web'
+UNBOUND_BIN='/usr/sbin/unbound'
+UNBOUND_CHECKCONF='/usr/sbin/unbound-checkconf'
+UNBOUND_CONTROL='/usr/sbin/unbound-control'
+UNBOUND_ANCHOR='/usr/sbin/unbound-anchor'
+UNBOUND_CONTROL_SETUP='/usr/sbin/unbound-control-setup'
+ROOT_HINTS_FILE='/var/lib/unbound/root.hints'
 
 info() { printf '[INFO] %s\n' "$*"; }
 fail() { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
@@ -30,16 +37,16 @@ fi
 # sudo inherits the PHP-FPM service's read-only mounts. Keep that sandbox
 # and let systemd start the allowlisted system changes independently.
 case "$action" in
-    wizard-step-[1-5]|wizard-rollback|app-update)
+    wizard-step-[1-2]|wizard-rollback|app-update|resolver-verify|resolver-settings-status)
         (($# == 0)) || fail 'Aksi ini tidak menerima argumen.'
         ;;
 esac
 case "$action" in
-    wizard-step-[1-5]|wizard-rollback|app-update|apply-config|system-dns-status|system-dns-set|unbound-logging-set|update-blocklists|update-root-hints|\
+    wizard-step-[1-2]|wizard-rollback|app-update|apply-config|system-dns-status|system-dns-set|unbound-logging-set|resolver-verify|update-blocklists|update-root-hints|\
     blocklist-schedule|zabbix-install|zabbix-config|zabbix-service|firewall-enable|firewall-disable|firewall-add|\
     firewall-update|firewall-delete|cron-custom-save|cron-custom-delete)
         if [[ "${SUDO_USER:-}" == www-data ]]; then
-            exec /usr/bin/systemd-run --system --no-ask-password --quiet --wait --pipe --collect \
+            exec /usr/bin/systemd-run --system --no-ask-password --quiet --wait --pipe --collect --working-directory=/ \
                 --service-type=exec --setenv=SUDO_USER= --setenv=UNBOUND_WEB_SYSTEMD_ARGS=1 \
                 -- /usr/local/sbin/unbound-web-manage "$action" \
                 < <(if (($#)); then printf '%s\0' "$@"; fi)
@@ -160,171 +167,111 @@ system_dns_set() (
     info 'Alamat DNS sistem disimpan.'
 )
 
-unbound_loopback_listener_conflicts() {
-    local ipv6="$1"
-    awk -v ipv6="$ipv6" '
-        {
-            address=$5
-            if (address ~ /^(127\.0\.0\.1(%[^:]*)?|0\.0\.0\.0|\*):53$/ ||
-                address ~ /^\[?::\]?:53$/ ||
-                (ipv6 == "yes" && address ~ /^\[?::1(%[^:]*)?\]?:53$/)) print
-        }'
-}
-
 prepare_wizard() {
-    local listeners conflicts ipv6=no
-    if [[ -n "$(ip -6 -o address show dev lo scope host)" ]]; then ipv6=yes; fi
-    listeners="$(ss -H -lntu 'sport = :53')" || fail 'Gagal membaca listener port 53.'
-    conflicts="$(unbound_loopback_listener_conflicts "$ipv6" <<< "$listeners")"
-    if [[ -n "$conflicts" ]]; then
-        printf '%s\n' "$conflicts" >&2
-        fail 'Port 53 pada alamat loopback Unbound sudah digunakan.'
-    fi
-    getent ahosts nlnetlabs.nl >/dev/null || fail 'Resolver sistem saat ini gagal mengakses DNS Internet.'
+    local command
+    for command in systemctl; do
+        command -v "$command" >/dev/null 2>&1 || fail "Dependensi belum tersedia: $command. Jalankan install.sh terlebih dahulu."
+        info "Dependensi tersedia: $command"
+    done
     install -d -o root -g root -m 0700 "$wizard_state_dir"
     install -o root -g root -m 0600 /dev/null "$wizard_pending_file"
-    info 'Port loopback tersedia. Konfigurasi DNS sistem dipertahankan.'
+    if unbound_tools_ready; then
+        info "Paket Unbound tersedia: $($UNBOUND_BIN -V 2>&1 | head -n 1)."
+    else
+        fail 'Paket Unbound belum lengkap. Jalankan kembali install.sh dari terminal.'
+    fi
+    info 'Konfigurasi DNS sistem dipertahankan.'
 }
 
-download_source() {
-    local source_dir='/usr/local/src/unbound' archive temp_dir entry
-    install -d -o root -g root -m 0755 /usr/local/src
-    archive="$(mktemp /tmp/unbound-latest.XXXXXX.tar.gz)"
-    temp_dir="$(mktemp -d /usr/local/src/unbound-build.XXXXXX)"
-    curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
-        'https://nlnetlabs.nl/downloads/unbound/unbound-latest.tar.gz' --output "$archive"
-    [[ -s "$archive" ]] || fail 'Arsip source Unbound kosong.'
-    tar -tzf "$archive" > "$temp_dir.archive-list"
-    while IFS= read -r entry; do
-        [[ "$entry" != /* && ! "$entry" =~ (^|/)\.\.(/|$) ]] || fail 'Arsip source berisi path yang tidak aman.'
-    done < "$temp_dir.archive-list"
-    rm -f "$temp_dir.archive-list"
-    tar -xzf "$archive" --strip-components=1 -C "$temp_dir"
-    [[ -x "$temp_dir/configure" ]] || fail 'Script configure tidak ditemukan dalam arsip.'
-    if [[ -d "$source_dir" ]]; then mv -- "$source_dir" "${source_dir}.backup.$(date +%Y%m%d%H%M%S)"; fi
-    mv -- "$temp_dir" "$source_dir"
-    rm -f -- "$archive"
-    info "Source NLnet Labs diekstrak ke $source_dir."
-}
-
-compile_source() {
-    local source_dir='/usr/local/src/unbound' cores
-    [[ -x "$source_dir/configure" ]] || fail 'Source belum diunduh. Jalankan tahap download terlebih dahulu.'
-    cores="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1')"
-    [[ "$cores" =~ ^[1-9][0-9]*$ ]] || cores=1
-    info "Build Unbound memakai $cores core CPU."
-    (
-        cd -- "$source_dir"
-        ./configure --with-libevent --with-pthreads --with-ssl --sysconfdir=/etc/unbound --prefix=/usr/local
-        info 'Konfigurasi build selesai.'
-        make -j "$cores"
-        make install
-    )
-    ldconfig
+unbound_tools_ready() {
+    local tool
+    [[ "$(dpkg-query -W -f='${db:Status-Status}' unbound 2>/dev/null || true)" == installed ]] || return 1
+    [[ "$(dpkg-query -W -f='${db:Status-Status}' unbound-anchor 2>/dev/null || true)" == installed ]] || return 1
     for tool in unbound unbound-control unbound-checkconf unbound-anchor unbound-control-setup; do
-        [[ -x "/usr/local/sbin/$tool" ]] || fail "Binary hasil build tidak ditemukan: /usr/local/sbin/$tool"
+        [[ -x "/usr/sbin/$tool" ]] || return 1
     done
-    info "Build selesai: $(/usr/local/sbin/unbound -V 2>&1 | head -n 1)"
 }
 
 valid_root_hints() {
     grep -Eiq '^\.[[:space:]]+([0-9]+[[:space:]]+)?(IN[[:space:]]+)?NS[[:space:]]+[^[:space:]]+' "$1"
 }
 
-postinstall_unbound() {
-    local hints_tmp anchor_status=0 interfaces='127.0.0.1' acls='127.0.0.0/8'
-    getent group unbound >/dev/null || groupadd --system unbound
-    id unbound >/dev/null 2>&1 || useradd --system --gid unbound --home-dir /var/lib/unbound --no-create-home --shell /usr/sbin/nologin unbound
-    install -d -o root -g unbound -m 0750 /etc/unbound /etc/unbound/unbound.conf.d
+ensure_root_hints() {
+    local hints_tmp
     install -d -o unbound -g unbound -m 0750 /var/lib/unbound
-    hints_tmp="$(mktemp /etc/unbound/root.hints.XXXXXX)"
+    if [[ -s "$ROOT_HINTS_FILE" ]] && valid_root_hints "$ROOT_HINTS_FILE"; then
+        chown root:unbound "$ROOT_HINTS_FILE"
+        chmod 0640 "$ROOT_HINTS_FILE"
+        info 'Root hints yang valid sudah tersedia; unduhan dilewati.'
+        return
+    fi
+    hints_tmp="$(mktemp /var/lib/unbound/root.hints.XXXXXX)"
     if ! curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
         'https://www.internic.net/domain/named.root' --output "$hints_tmp"; then
-        rm -f "$hints_tmp"; fail 'Unduhan root.hints gagal.'
+        rm -f -- "$hints_tmp"
+        fail 'Unduhan root.hints gagal.'
     fi
-    valid_root_hints "$hints_tmp" || { rm -f "$hints_tmp"; fail 'File root.hints tidak valid.'; }
+    valid_root_hints "$hints_tmp" || { rm -f -- "$hints_tmp"; fail 'File root.hints tidak valid.'; }
     chown root:unbound "$hints_tmp"
     chmod 0640 "$hints_tmp"
-    mv -f -- "$hints_tmp" /etc/unbound/root.hints
-    [[ -x /usr/local/sbin/unbound-anchor ]] || fail 'Binary /usr/local/sbin/unbound-anchor tidak tersedia setelah build.'
-    /usr/local/sbin/unbound-anchor -a /var/lib/unbound/root.key || anchor_status=$?
-    # Status 1 is expected when the built-in or certificate-updated trust anchor is used.
+    mv -f -- "$hints_tmp" "$ROOT_HINTS_FILE"
+    info 'Root hints terbaru berhasil dipasang.'
+}
+
+ensure_dnssec_anchor() {
+    local anchor_status=0
+    install -d -o unbound -g unbound -m 0750 /var/lib/unbound
+    if [[ -s /var/lib/unbound/root.key ]]; then
+        chown unbound:unbound /var/lib/unbound/root.key
+        chmod 0640 /var/lib/unbound/root.key
+        info 'Trust anchor DNSSEC sudah tersedia; bootstrap dilewati.'
+        return
+    fi
+    "$UNBOUND_ANCHOR" -a /var/lib/unbound/root.key || anchor_status=$?
     ((anchor_status <= 1)) && [[ -s /var/lib/unbound/root.key ]] ||
         fail 'unbound-anchor tidak menghasilkan trust anchor DNSSEC.'
     chown unbound:unbound /var/lib/unbound/root.key
     chmod 0640 /var/lib/unbound/root.key
-    /usr/local/sbin/unbound-control-setup -d /etc/unbound
-    chown unbound:unbound /etc/unbound/unbound_server.key /etc/unbound/unbound_server.pem
-    chmod 0640 /etc/unbound/unbound_server.key
-    chmod 0644 /etc/unbound/unbound_server.pem
-    chown root:unbound /etc/unbound/unbound_control.key /etc/unbound/unbound_control.pem
-    chmod 0640 /etc/unbound/unbound_control.key /etc/unbound/unbound_control.pem
-    if [[ -n "$(ip -6 -o address show dev lo scope host)" ]]; then
-        interfaces+=',::1'
-        acls+=',::1/128'
-    fi
-    make_config "$interfaces" '53' "$acls" '2' '128m' '256m' 'yes' '60' '86400' '2' 'yes'
-    cat > /etc/systemd/system/unbound.service <<'UNIT'
-[Unit]
-Description=Unbound DNS resolver
-Documentation=https://unbound.docs.nlnetlabs.nl/
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=unbound
-Group=unbound
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
-RuntimeDirectory=unbound
-RuntimeDirectoryMode=0750
-ExecStart=/usr/local/sbin/unbound -d -c /etc/unbound/unbound.conf
-ExecReload=/usr/local/sbin/unbound-control -c /etc/unbound/unbound.conf reload
-Restart=on-failure
-RestartSec=2s
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-PrivateTmp=true
-ReadWritePaths=/var/lib/unbound /run/unbound
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-    if systemd-detect-virt --quiet --container; then
-        # The container already provides filesystem isolation. Some LXC policies deny nested mounts.
-        sed -i -e '/^ProtectSystem=/d' -e '/^ProtectHome=/d' -e '/^PrivateTmp=/d' -e '/^ReadWritePaths=/d' \
-            /etc/systemd/system/unbound.service
-    fi
-    systemctl daemon-reload
-    info 'Root hints, DNSSEC trust anchor, TLS control keys, konfigurasi dasar, dan unit systemd siap.'
+    info 'Trust anchor DNSSEC siap.'
 }
 
-verify_unbound() (
-    local dns_test='' dnssec_test='' attempt
-    [[ -f "$wizard_pending_file" ]] || fail 'Mulai dari tahap persiapan wizard.'
-    /usr/local/sbin/unbound-checkconf "$CONF_FILE"
-    trap 'if [[ -f "$wizard_pending_file" ]]; then systemctl disable --now unbound >/dev/null 2>&1 || true; fi' EXIT
-    systemctl enable --now unbound
-    for attempt in {1..6}; do
-        dns_test="$(dig @127.0.0.1 nlnetlabs.nl +time=3 +tries=1 +short)" || dns_test=''
-        [[ -n "$dns_test" ]] && break
-        sleep 1
-    done
-    /usr/local/sbin/unbound-control -c "$CONF_FILE" status
-    [[ -n "$dns_test" ]] || fail 'Uji resolusi lokal gagal.'
-    dnssec_test="$(dig @127.0.0.1 nlnetlabs.nl +dnssec +time=5 +tries=2)"
-    grep -Eq 'flags:.*[[:space:]]ad[[:space:];]' <<< "$dnssec_test" || fail 'Validasi DNSSEC tidak menghasilkan bit AD.'
+ensure_control_keys() {
+    if [[ ! -s /etc/unbound/unbound_server.key || ! -s /etc/unbound/unbound_server.pem ||
+          ! -s /etc/unbound/unbound_control.key || ! -s /etc/unbound/unbound_control.pem ]]; then
+        "$UNBOUND_CONTROL_SETUP" -d /etc/unbound
+    fi
+    chown unbound:unbound /etc/unbound/unbound_server.key /etc/unbound/unbound_server.pem \
+        /etc/unbound/unbound_control.key /etc/unbound/unbound_control.pem
+    chmod 0640 /etc/unbound/unbound_server.key /etc/unbound/unbound_server.pem \
+        /etc/unbound/unbound_control.key /etc/unbound/unbound_control.pem
+}
+
+postinstall_unbound() {
+    unbound_tools_ready || fail 'Paket Unbound belum lengkap. Jalankan kembali install.sh dari terminal.'
+    "$UNBOUND_CHECKCONF" "$CONF_FILE"
+    if getent passwd unbound >/dev/null; then
+        ensure_control_keys
+    fi
+    systemctl enable unbound >/dev/null
+    if ! systemctl is-active --quiet unbound; then
+        systemctl reset-failed unbound >/dev/null 2>&1 || true
+    fi
+    if ! systemctl start unbound; then
+        systemctl status --no-pager unbound || true
+        fail 'Service Unbound bawaan Ubuntu gagal dijalankan. Periksa status di atas.'
+    fi
+    systemctl is-active --quiet unbound || fail 'Service Unbound belum aktif.'
     rm -f -- "$wizard_pending_file"
-    info 'Unbound dan DNSSEC berhasil diuji di 127.0.0.1:53. DNS sistem tetap dipertahankan.'
-)
+    info 'Service Unbound bawaan Ubuntu sudah aktif. Lanjutkan konfigurasi dari Settings.'
+}
 
 make_config() {
-    local interfaces_csv="$1" port="$2" acl_csv="$3" threads="$4" msg_cache="$5" rrset_cache="$6" prefetch="$7" min_ttl="$8" max_ttl="$9" slabs="${10}" harden="${11}" value
-    local -a interfaces=() acls=()
+    local interfaces_csv="$1" port="$2" acl_csv="$3" threads="$4" msg_cache="$5" rrset_cache="$6" prefetch="$7" min_ttl="$8" max_ttl="$9" slabs="${10}"
+    local dnssec="${11}" root_hints="${12}" upstream_mode="${13}" forwarders_csv="${14}" value module_config
+    local -a interfaces=() acls=() forwarders=()
     IFS=',' read -r -a interfaces <<< "$interfaces_csv"
     IFS=',' read -r -a acls <<< "$acl_csv"
+    if [[ -n "$forwarders_csv" ]]; then IFS=',' read -r -a forwarders <<< "$forwarders_csv"; fi
     ((${#interfaces[@]} > 0 && ${#acls[@]} > 0)) || fail 'Interface dan access-control wajib diisi.'
     for value in "${interfaces[@]}"; do valid_ip "$value" || fail "Alamat interface tidak valid: $value"; done
     for value in "${acls[@]}"; do valid_cidr "$value" || fail "Access-control tidak valid: $value"; done
@@ -337,20 +284,27 @@ make_config() {
     valid_uint "$max_ttl" && ((10#$max_ttl <= 604800 && 10#$max_ttl >= 10#$min_ttl)) || fail 'cache-max-ttl harus sama atau lebih besar dari cache-min-ttl dan maksimal 604800 detik.'
     valid_uint "$slabs" && ((10#$slabs <= 256)) || fail 'Jumlah cache slabs harus 1 sampai 256.'
     (( (10#$slabs & (10#$slabs - 1)) == 0 )) || fail 'Jumlah cache slabs harus pangkat dua.'
-    [[ "$harden" == yes || "$harden" == no ]] || fail 'harden-dnssec-stripped hanya menerima yes atau no.'
+    [[ "$dnssec" == yes || "$dnssec" == no ]] || fail 'Pilihan DNSSEC tidak valid.'
+    [[ "$root_hints" == yes || "$root_hints" == no ]] || fail 'Pilihan root hints tidak valid.'
+    [[ "$upstream_mode" == root || "$upstream_mode" == forward || "$upstream_mode" == both ]] || fail 'Mode resolver tidak valid.'
+    if [[ "$upstream_mode" == forward || "$upstream_mode" == both ]]; then
+        ((${#forwarders[@]} >= 1 && ${#forwarders[@]} <= 8)) || fail 'Mode forwarder memerlukan satu sampai delapan alamat upstream.'
+        for value in "${forwarders[@]}"; do valid_ip "$value" || fail "Alamat upstream tidak valid: $value"; done
+    fi
+    [[ "$upstream_mode" != forward || "$root_hints" == no ]] || fail 'Root hints hanya digunakan pada mode Root atau Gabungan.'
+    if [[ "$dnssec" == yes ]]; then module_config='validator iterator'; else module_config='iterator'; fi
 
-    local temp_file backup_file
-    install -d -o root -g unbound -m 0750 /etc/unbound /etc/unbound/unbound.conf.d
+    local temp_file validation_backup=''
+    [[ -d /etc/unbound/unbound.conf.d ]] || fail 'Direktori konfigurasi paket Unbound tidak ditemukan. Jalankan kembali install.sh.'
     install -d -o unbound -g unbound -m 0750 /var/lib/unbound
-    temp_file="$(mktemp /etc/unbound/unbound.conf.XXXXXX)"
+    [[ "$root_hints" == no ]] || ensure_root_hints
+    [[ "$dnssec" == no ]] || ensure_dnssec_anchor
+    temp_file="$(mktemp /etc/unbound/unbound.conf.d/50-unbound-web.conf.XXXXXX)"
     {
+        printf '# unbound-web-upstream-mode: %s\n' "$upstream_mode"
         cat <<'CONF'
 server:
     verbosity: 0
-    username: "unbound"
-    chroot: ""
-    directory: "/etc/unbound"
-    pidfile: "/run/unbound/unbound.pid"
 CONF
         for value in "${interfaces[@]}"; do printf '    interface: %s\n' "$value"; done
         printf '    port: %s\n' "$port"
@@ -379,46 +333,46 @@ CONF
     cache-min-ttl: $min_ttl
     cache-max-ttl: $max_ttl
     prefetch: $prefetch
-    prefetch-key: yes
+    prefetch-key: $dnssec
     statistics-cumulative: yes
     extended-statistics: yes
+    module-config: "$module_config"
     qname-minimisation: yes
-    harden-dnssec-stripped: $harden
+    harden-dnssec-stripped: $dnssec
     hide-identity: yes
     hide-version: yes
     minimal-responses: yes
     edns-buffer-size: 1232
-    root-hints: "/etc/unbound/root.hints"
 CONF
-        if ! grep -RqsE '^[[:space:]]*auto-trust-anchor-file:' /etc/unbound/unbound.conf.d --include='*.conf' 2>/dev/null; then
-            printf '    auto-trust-anchor-file: "/var/lib/unbound/root.key"\n'
+        if [[ "$root_hints" == yes && "$upstream_mode" != forward ]]; then
+            printf '    root-hints: "%s"\n' "$ROOT_HINTS_FILE"
         fi
-        printf '    include: "/etc/unbound/unbound.conf.d/*.conf"\n'
-        cat <<'CONF'
-
-remote-control:
-    control-enable: yes
-    control-interface: 127.0.0.1
-    control-use-cert: yes
-    server-key-file: "/etc/unbound/unbound_server.key"
-    server-cert-file: "/etc/unbound/unbound_server.pem"
-    control-key-file: "/etc/unbound/unbound_control.key"
-    control-cert-file: "/etc/unbound/unbound_control.pem"
-CONF
+        if [[ "$upstream_mode" == forward || "$upstream_mode" == both ]]; then
+            printf '\nforward-zone:\n    name: "."\n'
+            if [[ "$upstream_mode" == both ]]; then
+                printf '    forward-first: yes\n'
+            else
+                printf '    forward-first: no\n'
+            fi
+            for value in "${forwarders[@]}"; do printf '    forward-addr: %s\n' "$value"; done
+        fi
     } > "$temp_file"
 
-    if ! /usr/local/sbin/unbound-checkconf "$temp_file"; then
+    if ! "$UNBOUND_CHECKCONF" "$temp_file"; then
         rm -f -- "$temp_file"
         fail 'unbound-checkconf menolak konfigurasi. File aktif tidak diubah.'
     fi
-    if [[ -e "$CONF_FILE" ]]; then
-        backup_file="$CONF_FILE.web-backup.$(date +%Y%m%d%H%M%S)"
-        cp -a -- "$CONF_FILE" "$backup_file"
-        info "Cadangan konfigurasi dibuat: $backup_file"
+    if [[ -f "$MANAGED_CONF" ]]; then
+        validation_backup="$(mktemp /etc/unbound/unbound.conf.d/50-unbound-web.previous.XXXXXX)"
+        cp -a -- "$MANAGED_CONF" "$validation_backup"
     fi
-    install -o root -g unbound -m 0640 "$temp_file" "$CONF_FILE"
+    install -o root -g unbound -m 0640 "$temp_file" "$MANAGED_CONF"
     rm -f -- "$temp_file"
-    /usr/local/sbin/unbound-checkconf "$CONF_FILE"
+    if ! "$UNBOUND_CHECKCONF" "$CONF_FILE"; then
+        if [[ -n "$validation_backup" ]]; then mv -f -- "$validation_backup" "$MANAGED_CONF"; else rm -f -- "$MANAGED_CONF"; fi
+        fail 'Konfigurasi gabungan ditolak. File aplikasi sebelumnya dipulihkan.'
+    fi
+    [[ -z "$validation_backup" ]] || rm -f -- "$validation_backup"
 }
 
 set_schedule() {
@@ -477,22 +431,22 @@ delete_custom_cron() {
 
 update_root_hints() {
     local temp backup
-    [[ -x /usr/local/sbin/unbound-checkconf && -f "$CONF_FILE" ]] || fail 'Unbound belum terpasang.'
-    [[ -s /etc/unbound/root.hints ]] || fail 'Root hints aktif tidak ditemukan; tidak ada file untuk dipulihkan.'
-    temp="$(mktemp /etc/unbound/root.hints.XXXXXX)"
-    backup="$(mktemp /etc/unbound/root.hints.previous.XXXXXX)"
+    [[ -x "$UNBOUND_CHECKCONF" && -f "$CONF_FILE" ]] || fail 'Unbound belum terpasang.'
+    [[ -s "$ROOT_HINTS_FILE" ]] || fail 'Root hints aktif tidak ditemukan; aktifkan dari Settings terlebih dahulu.'
+    temp="$(mktemp /var/lib/unbound/root.hints.XXXXXX)"
+    backup="$(mktemp /var/lib/unbound/root.hints.previous.XXXXXX)"
     if ! curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 'https://www.internic.net/domain/named.root' --output "$temp"; then
         rm -f "$temp" "$backup"; fail 'Unduhan root.hints gagal.'
     fi
     valid_root_hints "$temp" || { rm -f "$temp" "$backup"; fail 'File root.hints tidak valid.'; }
-    if ! cp -a /etc/unbound/root.hints "$backup"; then
+    if ! cp -a "$ROOT_HINTS_FILE" "$backup"; then
         rm -f "$temp" "$backup"; fail 'Cadangan root.hints tidak dapat dibuat.'
     fi
     chown root:unbound "$temp"
     chmod 0640 "$temp"
-    mv -f -- "$temp" /etc/unbound/root.hints
-    if ! /usr/local/sbin/unbound-checkconf "$CONF_FILE" || ! systemctl reload unbound; then
-        mv -f -- "$backup" /etc/unbound/root.hints
+    mv -f -- "$temp" "$ROOT_HINTS_FILE"
+    if ! "$UNBOUND_CHECKCONF" "$CONF_FILE" || ! systemctl reload unbound; then
+        mv -f -- "$backup" "$ROOT_HINTS_FILE"
         systemctl reload unbound || true
         rm -f "$temp" "$backup"; fail 'Perubahan root.hints gagal divalidasi atau service gagal reload.'
     fi
@@ -562,7 +516,7 @@ lock_unbound_config() {
 
 set_unbound_logging() {
     local queries="$1" replies="$2" temp backup='' tag=no
-    local dir='/etc/unbound/unbound.conf.d' check='/usr/local/sbin/unbound-checkconf'
+    local dir='/etc/unbound/unbound.conf.d' check="$UNBOUND_CHECKCONF"
     local target="$dir/99-unbound-web-logging.conf"
     [[ "$queries" == yes || "$queries" == no ]] || fail 'Nilai log query tidak valid.'
     [[ "$replies" == yes || "$replies" == no ]] || fail 'Nilai log reply tidak valid.'
@@ -570,7 +524,7 @@ set_unbound_logging() {
     lock_unbound_config
     if [[ "$queries" == yes || "$replies" == yes ]]; then tag=yes; fi
     temp="$(mktemp "$dir/.logging.XXXXXX")"
-    printf '    log-queries: %s\n    log-replies: %s\n    log-tag-queryreply: %s\n' "$queries" "$replies" "$tag" > "$temp"
+    printf 'server:\n    log-queries: %s\n    log-replies: %s\n    log-tag-queryreply: %s\n' "$queries" "$replies" "$tag" > "$temp"
     chown root:unbound "$temp"
     chmod 0640 "$temp"
     if [[ -e "$target" ]]; then
@@ -588,11 +542,79 @@ set_unbound_logging() {
     info 'Pengaturan log query dan reply disimpan.'
 }
 
+resolver_settings_status() {
+    local mode=root dnssec=yes root_hints=no
+    [[ -r "$CONF_FILE" ]] || fail 'unbound.conf belum tersedia.'
+    if [[ ! -r "$MANAGED_CONF" ]]; then
+        printf '%s\n' \
+            'mode=root' 'dnssec=yes' 'root_hints=no' \
+            'interfaces=127.0.0.1,::1' 'port=53' \
+            'access_control=127.0.0.0/8,::1/128' 'num_threads=2' \
+            'msg_cache=128m' 'rrset_cache=256m' 'cache_slabs=2' \
+            'cache_min_ttl=60' 'cache_max_ttl=86400' 'prefetch=yes'
+        return
+    fi
+    mode="$(awk '/^# unbound-web-upstream-mode: (root|forward|both)$/ {print $3; exit}' "$MANAGED_CONF")"
+    if [[ -z "$mode" ]]; then
+        if grep -Eq '^[[:space:]]*forward-zone:' "$MANAGED_CONF"; then
+            if grep -Eq '^[[:space:]]*forward-first:[[:space:]]+yes' "$MANAGED_CONF"; then mode=both; else mode=forward; fi
+        else
+            mode=root
+        fi
+    fi
+    grep -Eq '^[[:space:]]*module-config:[[:space:]]+"validator iterator"' "$MANAGED_CONF" && dnssec=yes
+    grep -Eq '^[[:space:]]*module-config:[[:space:]]+"iterator"' "$MANAGED_CONF" && dnssec=no
+    grep -Eq '^[[:space:]]*root-hints:' "$MANAGED_CONF" && root_hints=yes
+    printf 'mode=%s\ndnssec=%s\nroot_hints=%s\n' "$mode" "$dnssec" "$root_hints"
+    awk '
+        /^[[:space:]]*interface:[[:space:]]+/ {interfaces = interfaces sep $2; sep = ","}
+        /^[[:space:]]*access-control:[[:space:]]+/ {acls = acls asep $2; asep = ","}
+        /^[[:space:]]*port:[[:space:]]+/ {port = $2}
+        /^[[:space:]]*num-threads:[[:space:]]+/ {threads = $2}
+        /^[[:space:]]*msg-cache-size:[[:space:]]+/ {msg = $2}
+        /^[[:space:]]*rrset-cache-size:[[:space:]]+/ {rrset = $2}
+        /^[[:space:]]*msg-cache-slabs:[[:space:]]+/ {slabs = $2}
+        /^[[:space:]]*cache-min-ttl:[[:space:]]+/ {min_ttl = $2}
+        /^[[:space:]]*cache-max-ttl:[[:space:]]+/ {max_ttl = $2}
+        /^[[:space:]]*prefetch:[[:space:]]+/ {prefetch = $2}
+        END {
+            print "interfaces=" interfaces
+            print "port=" port
+            print "access_control=" acls
+            print "num_threads=" threads
+            print "msg_cache=" msg
+            print "rrset_cache=" rrset
+            print "cache_slabs=" slabs
+            print "cache_min_ttl=" min_ttl
+            print "cache_max_ttl=" max_ttl
+            print "prefetch=" prefetch
+        }
+    ' "$MANAGED_CONF"
+    awk '/^[[:space:]]*forward-addr:[[:space:]]+/ {print "forwarder=" $2}' "$MANAGED_CONF"
+}
+
+verify_resolver() {
+    local dns_test dnssec_test dnssec=no target
+    [[ -x "$UNBOUND_CHECKCONF" && -f "$CONF_FILE" ]] || fail 'Unbound belum terpasang.'
+    systemctl is-active --quiet unbound || fail 'Service Unbound tidak aktif.'
+    "$UNBOUND_CHECKCONF" "$CONF_FILE"
+    target="$(awk '/^[[:space:]]*interface:[[:space:]]+/ {gsub(/"/, "", $2); sub(/@.*/, "", $2); print $2; exit}' "$MANAGED_CONF" 2>/dev/null || true)"
+    case "$target" in ''|0.0.0.0) target=127.0.0.1 ;; ::|::0) target=::1 ;; esac
+    dns_test="$(dig "@$target" nlnetlabs.nl A +time=5 +tries=2)" || fail "Query DNS ke $target gagal."
+    grep -q 'status: NOERROR' <<< "$dns_test" || fail 'Resolver tidak mengembalikan status NOERROR.'
+    [[ "$("$UNBOUND_CHECKCONF" -o module-config "$CONF_FILE")" == *validator* ]] && dnssec=yes
+    if [[ "$dnssec" == yes ]]; then
+        dnssec_test="$(dig "@$target" nlnetlabs.nl A +dnssec +time=5 +tries=2)" || fail 'Query DNSSEC gagal.'
+        grep -Eq 'flags:.*[[:space:]]ad[[:space:];]' <<< "$dnssec_test" || fail 'DNSSEC aktif tetapi jawaban tidak memiliki flag AD.'
+    fi
+    info "Konfigurasi valid, service aktif, resolusi DNS berhasil, DNSSEC: $dnssec."
+}
+
 case "$action" in
     service-status)
-        if [[ -x /usr/local/sbin/unbound && ! -e "$wizard_pending_file" ]]; then
-            unbound_state="$(service_state unbound /usr/local/sbin/unbound)"
-            unbound_version="$(/usr/local/sbin/unbound -V 2>&1 | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n 1 || true)"
+        if [[ -x "$UNBOUND_BIN" && ! -e "$wizard_pending_file" ]]; then
+            unbound_state="$(service_state unbound "$UNBOUND_BIN")"
+            unbound_version="$("$UNBOUND_BIN" -V 2>&1 | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n 1 || true)"
         else
             unbound_state='not-installed'; unbound_version=''
         fi
@@ -606,32 +628,19 @@ case "$action" in
         printf 'zabbix=%s\n' "$zabbix_state"
         ;;
     stats)
-        [[ -x /usr/local/sbin/unbound-control ]] || fail 'Unbound dari source belum terpasang.'
-        /usr/local/sbin/unbound-control -c "$CONF_FILE" stats_noreset
+        [[ -x "$UNBOUND_CONTROL" ]] || fail 'Paket Unbound belum terpasang.'
+        "$UNBOUND_CONTROL" -c "$CONF_FILE" stats_noreset
         ;;
     wizard-step-1)
-        if [[ -x /usr/local/sbin/unbound ]] && systemctl is-active --quiet unbound; then
-            fail 'Unbound sudah aktif. Kelola konfigurasi dari Settings; wizard tidak perlu dijalankan ulang.'
-        fi
         printf 'OS: %s\n' "${PRETTY_NAME:-unknown}"
         printf 'Arsitektur: %s | CPU: %s core\n' "$(dpkg --print-architecture)" "$(getconf _NPROCESSORS_ONLN)"
         printf 'RAM: %s MB\n' "$(awk '/^MemTotal:/ {print int($2/1024)}' /proc/meminfo)"
         printf 'Ruang kosong /var: %s MB\n' "$(df -Pm /var | awk 'NR==2 {print $4}')"
-        command -v apt-get >/dev/null && command -v systemctl >/dev/null && command -v curl >/dev/null && command -v make >/dev/null || fail 'Dependensi build belum tersedia. Jalankan install.sh terlebih dahulu.'
         prepare_wizard
         info 'Persiapan sistem selesai.'
         ;;
     wizard-step-2)
-        download_source
-        ;;
-    wizard-step-3)
-        compile_source
-        ;;
-    wizard-step-4)
         postinstall_unbound
-        ;;
-    wizard-step-5)
-        verify_unbound
         ;;
     wizard-rollback)
         info 'Wizard mempertahankan konfigurasi DNS sistem.'
@@ -647,11 +656,11 @@ case "$action" in
         system_dns_set "$@"
         ;;
     apply-config)
-        (($# == 11)) || fail 'Parameter konfigurasi tidak lengkap.'
+        (($# == 14)) || fail 'Parameter konfigurasi tidak lengkap.'
         lock_unbound_config
-        prior_config="$(mktemp /etc/unbound/unbound.conf.previous.XXXXXX)"
-        if [[ -f "$CONF_FILE" ]]; then
-            cp -a -- "$CONF_FILE" "$prior_config"
+        prior_config="$(mktemp /etc/unbound/unbound.conf.d/50-unbound-web.rollback.XXXXXX)"
+        if [[ -f "$MANAGED_CONF" ]]; then
+            cp -a -- "$MANAGED_CONF" "$prior_config"
         else
             rm -f -- "$prior_config"
             prior_config=''
@@ -659,7 +668,10 @@ case "$action" in
         make_config "$@"
         if ! systemctl reload unbound; then
             if [[ -n "$prior_config" ]]; then
-                install -o root -g unbound -m 0640 "$prior_config" "$CONF_FILE"
+                install -o root -g unbound -m 0640 "$prior_config" "$MANAGED_CONF"
+                systemctl reload unbound || true
+            else
+                rm -f -- "$MANAGED_CONF"
                 systemctl reload unbound || true
             fi
             [[ -n "$prior_config" ]] && rm -f -- "$prior_config"
@@ -669,14 +681,24 @@ case "$action" in
         systemctl is-active --quiet unbound || fail 'Service Unbound tidak aktif setelah reload.'
         info 'Konfigurasi divalidasi dan service berhasil di-reload.'
         ;;
+    resolver-settings-status)
+        resolver_settings_status
+        ;;
+    resolver-verify)
+        verify_resolver
+        ;;
     view-config)
         [[ -r "$CONF_FILE" ]] || fail 'unbound.conf belum tersedia.'
+        printf '# %s\n' "$CONF_FILE"
         cat -- "$CONF_FILE"
+        for config_part in "$MANAGED_CONF" "$BLOCKLIST_CONF" /etc/unbound/unbound.conf.d/99-unbound-web-logging.conf; do
+            if [[ -r "$config_part" ]]; then printf '\n# %s\n' "$config_part"; cat -- "$config_part"; fi
+        done
         ;;
     unbound-logging-status)
-        [[ -x /usr/local/sbin/unbound-checkconf && -f "$CONF_FILE" ]] || fail 'Unbound belum terpasang.'
-        queries="$(/usr/local/sbin/unbound-checkconf -o log-queries "$CONF_FILE")"
-        replies="$(/usr/local/sbin/unbound-checkconf -o log-replies "$CONF_FILE")"
+        [[ -x "$UNBOUND_CHECKCONF" && -f "$CONF_FILE" ]] || fail 'Unbound belum terpasang.'
+        queries="$("$UNBOUND_CHECKCONF" -o log-queries "$CONF_FILE")"
+        replies="$("$UNBOUND_CHECKCONF" -o log-replies "$CONF_FILE")"
         printf '%s %s\n' "$queries" "$replies"
         ;;
     unbound-logging-set)

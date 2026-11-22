@@ -14,6 +14,9 @@ trap 'die "Pembaruan berhenti pada baris $LINENO."' ERR
     die 'Updater hanya mendukung Ubuntu 22.04 LTS (Jammy).'
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# Direktori rilis diganti saat aktivasi. Jalankan updater dari luar direktori
+# tersebut agar setiap proses selalu memiliki working directory yang valid.
+cd /
 # shellcheck source=scripts/web-deploy.bash
 source "$SCRIPT_DIR/scripts/web-deploy.bash"
 [[ -f /etc/unbound-web/.env && -f "$WEB_APP_DIR/public/index.php" ]] ||

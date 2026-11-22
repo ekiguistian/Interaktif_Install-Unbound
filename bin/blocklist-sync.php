@@ -138,7 +138,7 @@ try {
     if ($blocked === []) {
         fwrite(STDOUT, "Whitelist aktif atau belum ada sumber aktif; domain blokir berjumlah nol.\n");
     }
-    $check = CommandRunner::run(['/usr/local/sbin/unbound-checkconf', $newConf], 10);
+    $check = CommandRunner::run(['/usr/sbin/unbound-checkconf', $newConf], 10);
     if ($check['code'] !== 0) {
         throw new RuntimeException('unbound-checkconf menolak blocklist: ' . trim($check['output']));
     }
@@ -150,7 +150,7 @@ try {
     chown($confPath, 'root');
     chgrp($confPath, 'unbound');
     chmod($confPath, 0640);
-    $mainCheck = CommandRunner::run(['/usr/local/sbin/unbound-checkconf', '/etc/unbound/unbound.conf'], 10);
+    $mainCheck = CommandRunner::run(['/usr/sbin/unbound-checkconf', '/etc/unbound/unbound.conf'], 10);
     if ($mainCheck['code'] !== 0) {
         if ($old === null) {
             unlink($confPath);
