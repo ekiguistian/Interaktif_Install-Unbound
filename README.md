@@ -38,13 +38,13 @@ chmod +x instalasi-unbound-interaktif.sh
 ./instalasi-unbound-interaktif.sh
 ```
 
-Jalankan `git clone` dan installer sebagai akun yang memiliki hak sudo, atau lanjutkan sebagai `root`. Installer akan kembali menjalankan `apt-get update`, lalu memeriksa dan memasang dependensi sistem yang belum tersedia.
+Jalankan `git clone` dan installer sebagai akun yang memiliki hak sudo, atau lanjutkan sebagai `root`. Installer memeriksa dependensi terlebih dahulu. Jika semuanya sudah tersedia, APT tidak diperbarui dan paket tidak dipasang ulang. Jika ada yang kurang, installer menjalankan `apt-get update` lalu memasang paket yang belum tersedia.
 
 ## Alur installer
 
 1. Memeriksa versi OS, CPU, RAM, dan ruang kosong di `/var`. Host di bawah minimum akan dihentikan sebelum perubahan dilakukan.
-2. Menjalankan `apt-get update`.
-3. Memeriksa lalu memasang dependensi wajib: Unbound, paket `unbound-anchor`, Python 3, curl, Git, UFW, dnsutils, sudo, Zabbix Agent, dan root hints. Repository resmi Zabbix ditambahkan jika paket Agent tidak tersedia di APT distro.
+2. Memeriksa dependensi wajib: Unbound, paket `unbound-anchor`, Python 3, curl, Git, UFW, dnsutils, sudo, Zabbix Agent, dan root hints. Dependensi yang sudah tersedia hanya diperiksa. Jika ada yang kurang, installer memperbarui indeks APT dan memasang yang belum tersedia. Repository resmi Zabbix ditambahkan jika paket Agent tidak tersedia di APT distro.
+3. Memeriksa `/etc/unbound/unbound.conf` yang sudah ada dengan `unbound-checkconf` dan melaporkan status service. Konfigurasi yang tidak valid dapat diperbaiki dari menu **Generate / Perbaiki unbound.conf**.
 4. Meminta jenis server, alamat interface, jaringan yang boleh mengakses DNS, resource, PTR, upstream, logging, blocklist/whitelist, Zabbix, dan aturan SSH.
 5. Menampilkan ringkasan untuk diperiksa sebelum konfigurasi diterapkan.
 6. Membuat konfigurasi, memvalidasi dengan `unbound-checkconf`, memasang Unbound, dan mengatur UFW.

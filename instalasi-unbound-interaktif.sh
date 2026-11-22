@@ -70,6 +70,34 @@ has_system_command() {
         [[ -x "/usr/sbin/$name" || -x "/usr/bin/$name" ]]
 }
 
+dependency_available() {
+    case "$1" in
+        unbound) has_system_command unbound-checkconf && has_system_command unbound-control-setup ;;
+        unbound-anchor) has_system_command unbound-anchor ;;
+        python3) command -v python3 >/dev/null 2>&1 ;;
+        ufw) has_system_command ufw ;;
+        dnsutils) has_system_command dig ;;
+        sudo) command -v sudo >/dev/null 2>&1 ;;
+        git) command -v git >/dev/null 2>&1 ;;
+        curl) command -v curl >/dev/null 2>&1 ;;
+        zabbix-agent) has_system_command zabbix_agentd ;;
+        dns-root-data) [[ -s /usr/share/dns/root.hints || -s /usr/share/unbound/root.hints ]] ;;
+        *) return 2 ;;
+    esac
+}
+
+show_dependency_status() {
+    local dependency
+    printf '\nStatus dependensi wajib:\n'
+    for dependency in unbound unbound-anchor python3 curl git ufw dnsutils sudo zabbix-agent dns-root-data; do
+        if dependency_available "$dependency"; then
+            printf '  %-16s tersedia\n' "$dependency"
+        else
+            printf '  %-16s belum tersedia\n' "$dependency"
+        fi
+    done
+}
+
 run_as_root() {
     if (( EUID == 0 )); then
         "$@"
@@ -348,7 +376,7 @@ enable_official_zabbix_repository() {
 }
 
 install_dependencies() {
-    local missing=() zabbix_was_installed=no
+    local missing=() zabbix_was_installed=no dependency
 
     if ! command -v apt-get >/dev/null 2>&1; then
         error 'APT tidak tersedia; gunakan Ubuntu Server atau Debian yang didukung.'
@@ -364,10 +392,23 @@ install_dependencies() {
         zabbix_was_installed=yes
     fi
 
-    refresh_apt_indexes || return 1
+    # Avoid touching APT when the complete runtime is already present. This
+    # keeps existing servers on their current package versions and lets the
+    # installer proceed directly to checking/reparing Unbound configuration.
+    show_dependency_status
+    for dependency in unbound unbound-anchor python3 curl git ufw dnsutils sudo zabbix-agent dns-root-data; do
+        dependency_available "$dependency" || missing+=("$dependency")
+    done
+
+    if ((${#missing[@]} == 0)); then
+        info 'Semua dependensi wajib sudah terpasang; APT tidak diperbarui dan paket tidak dipasang ulang.'
+    else
+        info "Dependensi yang belum tersedia: ${missing[*]}"
+        refresh_apt_indexes || return 1
+    fi
 
     # Zabbix Agent is mandatory. Ubuntu packages it in Universe on supported releases.
-    if [[ "${ID:-}" == ubuntu ]] && ! apt-cache show zabbix-agent >/dev/null 2>&1; then
+    if [[ " ${missing[*]} " == *' zabbix-agent '* && "${ID:-}" == ubuntu ]] && ! apt-cache show zabbix-agent >/dev/null 2>&1; then
         info 'Paket zabbix-agent belum terlihat di APT; mengaktifkan komponen Ubuntu Universe.'
         if ! command -v add-apt-repository >/dev/null 2>&1; then
             install_packages software-properties-common || warn 'Komponen Universe tidak dapat diaktifkan; installer akan mencoba repository resmi Zabbix.'
@@ -379,30 +420,17 @@ install_dependencies() {
             warn 'Universe tidak tersedia atau gagal diperbarui; installer akan mencoba repository resmi Zabbix.'
         fi
     fi
-    if ! apt-cache show zabbix-agent >/dev/null 2>&1; then
+    if [[ " ${missing[*]} " == *' zabbix-agent '* ]] && ! apt-cache show zabbix-agent >/dev/null 2>&1; then
         enable_official_zabbix_repository || return 1
     fi
-    if ! apt-cache show zabbix-agent >/dev/null 2>&1; then
+    if [[ " ${missing[*]} " == *' zabbix-agent '* ]] && ! apt-cache show zabbix-agent >/dev/null 2>&1; then
         error 'Paket zabbix-agent tetap tidak tersedia setelah repository resmi diperiksa.'
         return 1
     fi
 
-    if ! has_system_command unbound-checkconf || ! has_system_command unbound-control-setup; then missing+=(unbound); fi
-    has_system_command unbound-anchor || missing+=(unbound-anchor)
-    command -v python3 >/dev/null 2>&1 || missing+=(python3)
-    has_system_command ufw || missing+=(ufw)
-    has_system_command dig || missing+=(dnsutils)
-    command -v sudo >/dev/null 2>&1 || missing+=(sudo)
-    command -v git >/dev/null 2>&1 || missing+=(git)
-    command -v curl >/dev/null 2>&1 || missing+=(curl)
-    has_system_command zabbix_agentd || missing+=(zabbix-agent)
-    [[ -s /usr/share/dns/root.hints || -s /usr/share/unbound/root.hints ]] || missing+=(dns-root-data)
-
     if ((${#missing[@]})); then
-        info "Dependensi wajib yang akan dipasang: ${missing[*]}"
+        info "Memasang dependensi yang belum tersedia: ${missing[*]}"
         install_packages "${missing[@]}" || return 1
-    else
-        info 'Semua dependensi wajib sudah tersedia.'
     fi
 
     has_system_command unbound-checkconf || { error 'Unbound belum berhasil dipasang.'; return 1; }
@@ -422,6 +450,27 @@ install_dependencies() {
         run_as_root systemctl disable --now zabbix-agent >/dev/null 2>&1 || true
     fi
     info 'Pemeriksaan seluruh dependensi wajib selesai.'
+}
+
+check_existing_unbound_configuration() {
+    local config='/etc/unbound/unbound.conf'
+    if [[ ! -f "$config" ]]; then
+        info 'Konfigurasi Unbound belum ditemukan; konfigurasi baru akan dibuat dari menu.'
+        return 0
+    fi
+
+    info "Memeriksa konfigurasi Unbound yang sudah ada: $config"
+    if run_as_root unbound-checkconf "$config"; then
+        info 'Konfigurasi Unbound valid.'
+    else
+        warn 'Konfigurasi Unbound tidak valid. Pilih Generate / Perbaiki unbound.conf untuk membuat dan memvalidasi konfigurasi baru.'
+    fi
+
+    if systemctl is-active --quiet unbound; then
+        info 'Service Unbound sedang aktif.'
+    else
+        warn 'Service Unbound tidak aktif. Status akan diperiksa kembali setelah konfigurasi diterapkan.'
+    fi
 }
 
 check_supported_os() {
@@ -1378,11 +1427,12 @@ main() {
     check_minimum_host
     check_root_access
     begin_transaction
-    printf '\nTahap 2: perbarui indeks APT, lalu periksa dan pasang dependensi wajib (Unbound, unbound-anchor, Python 3, curl, git, UFW, dnsutils, sudo, Zabbix Agent, dan root hints).\n'
+    printf '\nTahap 2: periksa dependensi wajib. APT hanya diperbarui jika ada dependensi yang belum tersedia.\n'
     install_dependencies
+    check_existing_unbound_configuration
 
     while true; do
-        printf '\nMENU UTAMA\n  1. Generate unbound.conf\n  2. Batal - Keluar\n'
+        printf '\nMENU UTAMA\n  1. Generate / Perbaiki unbound.conf\n  2. Batal - Keluar\n'
         main_choice="$(ask_choice 'Pilih menu (1-2)' 1 2)"
         [[ "$main_choice" == 2 ]] && { printf 'Aplikasi ditutup.\n'; return; }
 
