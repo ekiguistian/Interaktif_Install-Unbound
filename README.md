@@ -1,265 +1,153 @@
-# Unbound DNS Web Manager dan Tools CLI
+# Unbound DNS Web Manager
 
-Repository ini menyediakan web manager untuk instalasi Unbound, pengaturan server, blocklist, Zabbix, firewall, dan monitoring. Tools CLI lama tetap tersedia.
+Pasang dan kelola resolver DNS Unbound dari browser. Web Manager menyediakan wizard instalasi, pengaturan resolver, monitoring, dan pengelolaan firewall untuk **Ubuntu Server 22.04 LTS (Jammy)**.
 
-## Web Manager
+## Persyaratan
 
-Web Manager memakai PHP Native 8.4, Nginx, MySQL, Tailwind CSS CDN, Font Awesome CDN, Chart.js, dan dnsperf. Dashboard publik memperbarui data tanpa reload. Perubahan server hanya tersedia setelah login admin.
+- Ubuntu Server 22.04 LTS dengan systemd, arsitektur amd64 atau arm64.
+- Minimal 1 vCPU, RAM 2 GB, dan ruang kosong 4 GB pada filesystem yang memuat `/var`.
+- Akun dengan akses sudo atau root, koneksi Internet, dan port TCP 8000 yang tersedia.
+- MySQL berjalan di server yang sama. Installer memasangnya jika belum tersedia.
 
-### Sistem yang didukung
+Installer memasang Nginx, PHP 8.4 dan ekstensi yang dipakai aplikasi, MySQL, UFW, cron, logrotate, dnsperf, serta dependensi kompilasi Unbound. [Repository PHP Surý](https://packages.sury.org/php/README.txt) · [Paket MySQL Ubuntu Jammy](https://packages.ubuntu.com/jammy/mysql-server)
 
-- Ubuntu Server 22.04 LTS (Jammy)
-- Arsitektur amd64 atau arm64
-- systemd, APT, akses root, dan koneksi Internet
-- Minimum 1 CPU, RAM 2 GB, ruang kosong 4 GB di `/var`
+## Instalasi dari OS kosong
 
-Web Manager hanya mendukung Ubuntu 22.04. `install.sh` menambahkan PPA `ondrej/php` untuk PHP 8.4 dan repository MySQL Community 8.4 LTS. Paket yang dipasang mencakup `php8.4-fpm`, `php8.4-mysql`, `php8.4-cli`, `php8.4-curl`, `php8.4-mbstring`, `php8.4-xml`, Nginx, MySQL, Git, `dnsperf`, `dnsutils`, `curl`, OpenSSL, `build-essential`, `libssl-dev`, `libexpat1-dev`, `libevent-dev`, `bison`, dan `flex`. PHP Native tidak memerlukan Python. Zabbix Agent baru dipasang dari Settings.
+### 1. Pasang Ubuntu Server 22.04 LTS
 
-`install.sh` tidak memasang Unbound atau Zabbix Agent. Wizard mengunduh source Unbound terbaru dari NLnet Labs dan mengompilasinya. Agent Zabbix dipasang dari Settings.
-
-### Instalasi Web Manager
-
-Pada server baru, login sebagai `root`. Perbarui daftar paket dan pasang Git serta sertifikat CA sebelum clone:
+Unduh image Jammy sesuai arsitektur server, lalu boot dari ISO di VM atau server fisik. Saat instalasi, buat akun admin, siapkan jaringan, dan pilih **Install OpenSSH server** jika akan masuk lewat SSH. Setelah reboot, masuk ke server dan catat alamat IP yang dapat dijangkau komputer admin. [ISO amd64](https://releases.ubuntu.com/jammy/) · [ISO arm64](https://cdimage.ubuntu.com/ubuntu/releases/jammy/release/) · [Panduan instalasi Ubuntu Server](https://ubuntu.com/server/docs/tutorial/basic-installation/)
 
 ```bash
-apt-get update
-apt-get install -y git ca-certificates
+. /etc/os-release
+printf '%s (%s)\n' "$PRETTY_NAME" "$VERSION_CODENAME"
+hostname -I
+```
+
+Pastikan hasil menunjukkan Ubuntu 22.04 LTS dengan codename `jammy`. Untuk resolver yang akan dipakai klien LAN, gunakan IP tetap atau reservasi DHCP.
+
+### 2. Perbarui paket dan pasang Git
+
+Jalankan perintah berikut sebelum clone. Jika masuk sebagai root, jalankan tanpa `sudo`.
+
+```bash
+sudo apt update
+sudo apt upgrade -y
+sudo apt install -y git ca-certificates
+```
+
+Jika Ubuntu meminta reboot setelah upgrade, reboot dan masuk kembali sebelum melanjutkan.
+
+### 3. Clone dan jalankan installer web
+
+```bash
 git clone https://github.com/ekiguistian/Interaktif_Install-Unbound.git
 cd Interaktif_Install-Unbound
-bash ./install.sh
+sudo bash ./install.sh
 ```
 
-Jalankan installer sebagai root. Script memverifikasi Ubuntu 22.04, CPU, RAM, dan ruang disk sebelum memasang dependensi. Installer membuat database, tabel, Nginx pada port `8000`, worker cron setiap menit, dan helper root dengan daftar aksi terbatas. Rule UFW untuk port 8000 ditambahkan, tetapi firewall tidak diaktifkan otomatis.
+Installer menyiapkan database, akun MySQL lokal, akun admin, dan `/etc/unbound-web/.env` secara otomatis. Installer mendeteksi IP dan interface jaringan, mengatur Nginx di port 8000, dan mengaktifkan layanan yang dibutuhkan. Kredensial yang sudah ada dipakai kembali saat installer dijalankan ulang.
 
-Di akhir instalasi, script menampilkan alamat `DB_PASS` yang dibuat untuk MySQL serta isi `.env.example`. Buat konfigurasi aplikasi dan isi kredensial admin:
+Setelah pemeriksaan halaman dan koneksi database lulus, terminal menampilkan:
+
+```text
+URL      : http://192.168.1.2:8000
+Username : admin
+Password : <password admin yang dibuat installer>
+```
+
+Gunakan URL yang dicetak installer. Simpan username dan password admin dengan aman.
+
+### 4. Pasang Unbound dari browser
+
+1. Buka URL Web Manager, pilih **Install Wizard**, lalu login sebagai admin.
+2. Jalankan setiap tahap secara berurutan. Wizard menyiapkan port 53 dan DNS sementara, mengunduh source, mengompilasi Unbound, memasang root hints dan DNSSEC, lalu menguji resolver.
+3. Setelah tahap terakhir berhasil, buka kembali **Live Monitor**. Status Unbound akan tampil aktif dan menu berubah menjadi **Setting**. Worker mencatat data setiap menit.
+
+### 5. Periksa DNS dari server
 
 ```bash
-cp /opt/unbound-web/.env.example /etc/unbound-web/.env
-nano /etc/unbound-web/.env
-chown root:www-data /etc/unbound-web/.env
-chmod 0640 /etc/unbound-web/.env
+systemctl is-active nginx php8.4-fpm mysql cron unbound
+curl -fsS http://127.0.0.1:8000/api/metrics
+dig @127.0.0.1 nlnetlabs.nl A +dnssec
 ```
 
-Ganti `DB_PASS` dengan nilai yang dicetak installer. Isi `ADMIN_USER`, `ADMIN_PASS`, dan `NET_INTERFACE`. Gunakan password admin yang panjang dan jangan salin file `.env` ke document root. File konfigurasi disimpan di `/etc/unbound-web/.env`.
+Service harus berstatus `active`, API harus mengembalikan `"ok":true`, dan hasil `dig` harus menampilkan `NOERROR` serta flag `ad`.
 
-Buka `http://IP-SERVER:8000`. URL aplikasi tidak memakai ekstensi `.php`; request langsung ke file `.php` diarahkan ke URL bersih dengan status 301. Dashboard publik tersedia tanpa login. Halaman Settings menggunakan kredensial dari `.env`.
+### 6. Hubungkan klien LAN dan monitoring bila diperlukan
 
-### Alur sistem
+1. Untuk melayani klien LAN, buka **Setting → Unbound**. Tambahkan IP LAN server, misalnya `192.168.1.2`, dan subnet klien, misalnya `192.168.1.0/24`, sambil mempertahankan interface dan ACL loopback. Validasi dan terapkan konfigurasi.
+2. Jika memakai UFW, buka **Firewall**. Pastikan akses SSH dan TCP 8000 dari jaringan admin tersedia. Tambahkan **Allow IN** untuk TCP dan UDP port 53 dari subnet klien, lalu aktifkan UFW bila diperlukan.
+3. Dari klien yang diizinkan, jalankan `dig @192.168.1.2 nlnetlabs.nl` dengan IP server yang sebenarnya. Jika berhasil, pakai IP itu sebagai DNS klien atau bagikan melalui DHCP.
+4. Untuk monitoring Zabbix, buka menu **Zabbix Agent**, isi alamat server dan hostname, lalu pasang dan periksa status agent.
 
-1. `install.sh` memeriksa OS dan resource, memasang PHP, Nginx, MySQL, Git, dnsperf, serta build dependencies. Unbound dan Zabbix Agent tidak dipasang oleh script ini.
-2. Admin menyalin `.env.example` ke `/etc/unbound-web/.env`, lalu mengisi kredensial admin dan interface jaringan.
-3. Worker `bin/worker.php` berjalan setiap menit. Worker membaca `unbound-control stats_noreset`, counter Ethernet, dan resource server, lalu menyimpan riwayat selama 30 hari.
-4. Wizard menjalankan lima tahap: cek sistem dan port 53, unduh source NLnet Labs, kompilasi source, siapkan root hints/DNSSEC/control certificate dan service systemd, lalu uji DNS serta resolver lokal. Output proses dikirim lewat SSE. Jika tahap gagal, resolver dan status `systemd-resolved` sebelumnya dipulihkan.
-5. Unbound mulai sebagai recursive resolver dari root hints. DNSSEC aktif melalui trust anchor. TLD publik seperti `.id` di-resolve lewat hierarki DNS publik. Setelah uji query dan validasi DNSSEC berhasil, resolver host dialihkan ke `127.0.0.1`.
-6. Dashboard menampilkan status beserta versi Unbound, Zabbix Agent, jumlah query/reply, cache hit, QPS, tipe query, response code, waktu rekursi, CPU, load, RAM, disk, uptime, dan trafik Ethernet. Grafik menampilkan QPS, cache hit, dan trafik selama satu jam terakhir.
-7. Settings mengatur konfigurasi Unbound, blocklist/whitelist, Zabbix Agent, firewall UFW, jadwal cron, domain uji, dan dnsperf.
+## Alur sistem
 
-Worker menulis log di `/var/log/unbound-web/worker.log`; hasil sinkronisasi blocklist dicatat di `/var/log/unbound-web/blocklist.log`. Logrotate menyimpan rotasi harian selama tujuh hari.
-
-### Modul Settings
-
-- **Konfigurasi Unbound**: interface, port, access-control, thread, cache size dan slabs, TTL, prefetch, dan hardening DNSSEC. Log query dan reply dapat diaktifkan secara terpisah. Konfigurasi divalidasi dengan `unbound-checkconf` sebelum service di-reload. File aktif tersedia dalam tampilan baca saja.
-- **Blocklist/whitelist**: tambah, ubah, aktifkan, nonaktifkan, dan hapus URL HTTPS atau domain whitelist. Parser mendukung hosts, Adblock `||domain^`, dan domain biasa. Download dipatok ke alamat IP publik yang sudah divalidasi, tanpa mengikuti redirect. Update memfilter whitelist, memvalidasi konfigurasi, lalu reload Unbound.
-- **Zabbix Agent**: pasang Agent 2 jika tersedia, atau Agent klasik. Isi `Server`, `ServerActive`, dan `Hostname`. Tombol **Enable** menjalankan agent dan mengaktifkannya saat boot. Tombol **Disable** menghentikan agent dan menonaktifkannya saat boot. Agent berjalan sebagai service systemd.
-- **Firewall**: buka **Firewall** dari navbar admin. Halaman ini menampilkan status dan tombol **Enable UFW** serta **Disable UFW**. Siapkan aturan SSH dan port web sebelum mengaktifkan UFW.
-- **Jadwal cron**: lihat job aplikasi, pilih interval blocklist, tambah/ubah/hapus jadwal root hints atau sinkronisasi blocklist. Perintah custom dibatasi ke tugas internal.
-- **dnsperf**: atur target IPv4 private atau loopback, port, durasi maksimal 300 detik, client, thread, dan QPS. Nilai QPS `0` berarti tanpa batas QPS. Hasil tampil langsung melalui SSE.
-- **Domain pengujian**: CRUD domain dan tipe query `A`, `AAAA`, `MX`, `TXT`, `NS`, atau `CNAME`. Installer menambahkan 100 domain umum sebagai awal.
-
-### Mengatur UFW
-
-1. Buka **Firewall** dari navbar admin. Pilih **Allow** atau **Deny**, arah **IN** atau **OUT**, protokol TCP/UDP, dan port tujuan.
-2. Isi IP/CIDR untuk membatasi sumber trafik **IN** atau tujuan trafik **OUT**. Alamat dapat berupa IPv4 atau IPv6. Kolom kosong berlaku untuk semua alamat dalam keluarga IP yang aktif di UFW.
-3. Gunakan filter **IN** atau **OUT** untuk melihat aturan. Buka aturan untuk mengubah atau menghapusnya. Aturan lanjutan seperti routing dan profil aplikasi tampil dalam daftar **Semua** dan dikelola melalui terminal.
-4. Klik **Enable UFW** atau **Disable UFW** di toolbar untuk mengubah status firewall. Aturan tersimpan tetap terlihat ketika UFW nonaktif.
-
-Mengubah aksi saja memakai mekanisme pembaruan UFW. Perubahan port, arah, protokol, atau IP/CIDR menambahkan aturan pengganti di akhir daftar. Periksa urutannya jika ada aturan yang saling tumpang tindih.
-
-Navbar admin berisi **Unbound**, **Zabbix Agent**, **Firewall**, dan **Log Out**. Submenu Unbound memuat konfigurasi, blocklist/whitelist, cron, uji DNS, dan domain uji. Navbar Live Monitor menampilkan **Install Wizard** sebelum Unbound terpasang dan **Setting** setelah terpasang.
-
-### Keamanan Web Manager
-
-Dashboard publik hanya membaca metrik. Login admin memakai username dan password dari `.env`; tidak ada menu untuk mengubah kredensial. Session memakai cookie HttpOnly dan SameSite Strict, formulir menggunakan token CSRF, login dibatasi, database memakai PDO prepared statements, dan nilai yang digunakan oleh shell divalidasi serta di-escape dengan `escapeshellarg()`.
-
-`www-data` tidak diberi sudo umum untuk menjalankan command arbitrer. Sudoers hanya mengizinkan `/usr/local/sbin/unbound-web-manage`; helper root memeriksa daftar aksi dan setiap argumennya sebelum memakai APT, systemd, Unbound, UFW, atau cron. File aplikasi dimiliki root dan tidak dapat ditulis oleh Nginx.
-
-Nginx bawaan memakai HTTP pada port `8000`. Untuk penggunaan di jaringan produksi, batasi akses dengan firewall/VPN atau pasang reverse proxy HTTPS sebelum memasukkan password admin. Tailwind CSS, Font Awesome, dan Chart.js dimuat dari CDN sehingga browser perlu akses Internet untuk tampilan lengkap.
-
-### Push ke GitHub
-
-Repository Git sudah digunakan pada workspace ini. Setelah membuat repository GitHub kosong, push branch `main` memakai script berikut:
-
-```bash
-bash scripts/push-github.sh https://github.com/OWNER/NAMA-REPOSITORY.git
+```mermaid
+flowchart TD
+    A["Pasang Ubuntu Server 22.04 LTS dan siapkan jaringan"] --> B["APT update dan upgrade, lalu instal Git"]
+    B --> C["Clone repo dan jalankan install.sh"]
+    C --> D["Pasang dependensi, buat database dan .env, aktifkan layanan"]
+    D --> E{"Halaman web dan database siap?"}
+    E -->|Tidak| F["Installer menampilkan kesalahan"]
+    E -->|Ya| G["Tampilkan URL, Username, dan Password"]
+    G --> H["Live Monitor publik"]
+    H --> I{"Unbound sudah terpasang?"}
+    I -->|Belum| J["Install Wizard dan login admin"]
+    J --> K["Siapkan resolver, kompilasi Unbound, pasang root hints dan DNSSEC"]
+    K --> L{"Uji DNS dan DNSSEC lulus?"}
+    L -->|Tidak| M["Pulihkan resolver sebelumnya"]
+    L -->|Ya| N["Gunakan Unbound sebagai resolver lokal"]
+    N --> O["Periksa service dan DNS, lalu buka Setting"]
+    I -->|Sudah| O
+    O --> P["Unbound, Zabbix Agent, dan Firewall"]
+    P --> Q["Worker merekam metrik setiap menit"]
+    Q --> H
 ```
 
-Script memeriksa URL GitHub, menambahkan perubahan, membuat commit bila ada file berubah, lalu menjalankan `git push -u`. Jangan masukkan token ke URL remote; gunakan SSH agent atau credential manager Git.
+## Fitur
 
-## Tools CLI
-
-Contoh IP LAN memakai jaringan private `192.168.1.0/24`. Contoh domain menggunakan `yourdomain.com`; ganti dengan jaringan dan domain milik sendiri.
-
-Contoh IP LAN menggunakan jaringan privat kelas C `192.168.1.0/24`. Nama domain contoh menggunakan `yourdomain.com`; ganti keduanya dengan jaringan dan domain milik sendiri sebelum dipakai.
-
-Repository ini menyediakan tiga script:
-
-| Script | Fungsi |
+| Menu | Fungsi |
 | --- | --- |
-| `Install-cli.sh` | Instalasi interaktif Unbound DNS Server melalui terminal. |
-| `Uninstall.sh` | Uninstalasi Interaktif - Clear OS. Menghapus stack Unbound/Zabbix/dnsperf. UFW di-reset dan dinonaktifkan. |
-| `Tes.sh` | Pasang dnsperf bila belum tersedia lalu uji resolver lokal dengan 100 domain. |
+| **Live Monitor** | Status dan versi Unbound, status Zabbix, query dan reply, QPS, cache hit, tipe query, kode respons, waktu rekursi, trafik jaringan, CPU, RAM, disk, dan uptime. Grafik menampilkan data satu jam terakhir. |
+| **Install Wizard** | Kompilasi Unbound dari source NLnet Labs, pemasangan root hints, DNSSEC, sertifikat control, unit systemd, dan pemeriksaan resolver. Output proses tampil langsung. |
+| **Unbound** | Atur interface DNS, ACL, thread, cache, TTL, prefetch, dan DNSSEC. Baca `unbound.conf` dan atur log query serta reply secara terpisah. |
+| **Blocklist dan Whitelist** | Kelola sumber HTTPS dan domain pengecualian. Mendukung format hosts, Adblock `\|\|domain^`, dan daftar domain biasa. Jalankan sinkronisasi langsung atau terjadwal. |
+| **Cron dan uji DNS** | Jadwalkan pembaruan root hints atau blocklist. Kelola domain uji dan jalankan dnsperf ke IP lokal atau privat hingga 300 detik dengan pilihan client, thread, dan QPS. |
+| **Zabbix Agent** | Pasang agent, atur `Server`, `ServerActive`, dan `Hostname`, lalu gunakan Enable, Disable, atau Restart. |
+| **Firewall** | Lihat status UFW, aktifkan atau nonaktifkan firewall, serta tambah, ubah, dan hapus aturan Allow atau Deny untuk arah IN dan OUT. |
 
-## Tampilan terminal CLI
+Worker menyimpan riwayat hingga 30 hari. Log worker ada di `/var/log/unbound-web/worker.log` dan log sinkronisasi di `/var/log/unbound-web/blocklist.log`.
 
-Ketiga script membersihkan layar saat berjalan di terminal interaktif, lalu menampilkan nama OS, versi kernel, dan arsitektur server. Informasi berwarna hijau, proses berwarna biru, dan peringatan atau error berwarna merah. Proses yang lama menampilkan indikator jam pasir. Warna dan pembersihan layar tidak dipakai saat script berjalan tanpa terminal. Setel `NO_COLOR=1` untuk menonaktifkan warna tanpa mematikan indikator jam pasir atau pembersihan layar. File konfigurasi Unbound dan ringkasan hasil dnsperf tetap berupa teks biasa.
+## Yang perlu diperhatikan
 
-## Alur penggunaan CLI
+- **Port jaringan.** Pastikan TCP 8000 dapat dijangkau dari jaringan admin. Wizard membutuhkan port DNS 53 dan akses DNS keluar. Wizard dapat menghentikan `systemd-resolved` dan mengubah resolver host setelah uji lulus. Gunakan akses konsol jika host sudah menjalankan DNS untuk sistem lain.
+- **Akses SSH.** Sebelum mengaktifkan UFW, pastikan aturan SSH dan port web sudah benar. Pada aturan IN, IP/CIDR adalah sumber. Pada aturan OUT, IP/CIDR adalah tujuan. Aturan lanjutan tampil dalam mode baca saja. Periksa urutan aturan setelah mengubah port, arah, protokol, atau alamat karena aturan pengganti ditambahkan di akhir.
+- **Pemeriksaan awal.** Jika halaman gagal dibuka, periksa `sudo nginx -t`, `sudo systemctl status nginx php8.4-fpm mysql`, dan hasil `curl -fsS http://127.0.0.1:8000/api/metrics` dari server.
+- **Aset browser.** Browser mengambil Tailwind CSS, Font Awesome, dan Chart.js dari CDN. Tampilan lengkap dan grafik memerlukan akses CDN.
+- **Tool terminal.** Installer CLI dan uninstaller mengelola file resolver dan firewall host. Lihat [panduan CLI](CLI.md) sebelum menggunakannya pada server yang sama.
 
-1. Jalankan `Install-cli.sh` untuk memeriksa OS dan resource, memasang dependensi yang kurang, lalu mengatur resolver, firewall, blocklist/whitelist, dan Zabbix dari pilihan interaktif. Installer meminta konfirmasi ringkasan sebelum menerapkan konfigurasi dan menjalankan pemeriksaan DNS serta DNSSEC setelah pemasangan.
-2. Jalankan `Tes.sh` di server untuk memeriksa DNS lokal, memanaskan cache, lalu mengukur resolver dengan dnsperf. Hasil pengujian dan ringkasan disimpan di `dnsperf-results/`.
-3. Jika ingin menghapus stack yang dipasang, jalankan `Uninstall.sh`. Script menampilkan rencana penghapusan, meminta konfirmasi `HAPUS`, menjalankan tahap uninstall, lalu melaporkan hasil sistem.
+### APT menampilkan `EXPKEYSIG` untuk MySQL
 
-Lihat [SECURITY.md](SECURITY.md) sebelum memakai server yang bisa diakses dari Internet. Panduan perubahan kode ada di [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## Sistem yang didukung
-
-- Ubuntu Server 24.04 atau lebih baru
-- Debian 12 atau lebih baru
-- Minimal 1 CPU, RAM 512 MB, dan ruang kosong 1 GB di `/var`
-- systemd, APT, dan akses root atau sudo
-- LXC Proxmox perlu mendukung systemd dan UFW (`NET_ADMIN`)
-
-Pada 22 November 2026, rilis terbaru yang tercatat adalah Ubuntu 26.10, Ubuntu 26.04 LTS, dan Debian 13.8. Lihat [rilis Ubuntu](https://wiki.ubuntu.com/Releases) dan [rilis Debian](https://www.debian.org/releases/index).
-
-## Menjalankan installer
-
-Pada instalasi Debian yang belum memiliki `sudo`, login sebagai `root`. Perbarui APT dan pasang paket persiapan berikut:
+Jika percobaan lama meninggalkan repository MySQL Oracle, jalankan installer terbaru langsung dari folder repo. Installer menangani entri lama sebelum menjalankan APT.
 
 ```bash
-apt-get update
-apt-get install -y sudo git ca-certificates curl
+sudo bash ./install.sh
 ```
 
-Jika ingin melanjutkan sebagai pengguna biasa, tambahkan akun tersebut ke grup `sudo`, lalu logout dan login kembali. Ganti `NAMA_USER` dengan nama akun Linux:
+Jika MySQL Community belum terpasang, installer mencadangkan entri lama dan memakai paket MySQL Ubuntu. Jika MySQL Community masih digunakan, installer memverifikasi dan memperbarui keyring Oracle sambil mempertahankan database. Verifikasi tanda tangan APT tetap aktif. [Panduan APT MySQL](https://dev.mysql.com/doc/mysql-apt-repo-quick-guide/en/)
 
-```bash
-usermod -aG sudo NAMA_USER
-```
+## Keamanan
 
-Jika tetap bekerja sebagai `root`, langkah ini tidak diperlukan.
+- Batasi port 8000 ke jaringan admin atau VPN. Gunakan reverse proxy HTTPS jika aplikasi diakses melalui jaringan yang tidak tepercaya. Dashboard publik menampilkan metrik kepada siapa pun yang dapat menjangkau port aplikasi.
+- Jaga izin `0640` pada `/etc/unbound-web/.env` dan simpan output kredensial secara privat. Ubah kredensial admin melalui file ini. Aplikasi membatasi percobaan login dan memakai token CSRF untuk aksi admin.
+- Batasi ACL DNS ke jaringan klien yang diizinkan. Log query dan reply dapat memuat alamat klien dan domain yang diminta.
+- Helper sistem membatasi aksi sudo aplikasi pada operasi yang didukung. Konfigurasi Unbound diperiksa sebelum reload. Unduhan blocklist menggunakan HTTPS dan alamat publik yang tervalidasi.
+- Laporkan masalah keamanan secara privat melalui kanal yang tercantum dalam [kebijakan keamanan](SECURITY.md).
 
-Clone repository, lalu jalankan installer:
+## Kontribusi
 
-```bash
-git clone https://github.com/ekiguistian/Interaktif_Install-Unbound.git
-cd Interaktif_Install-Unbound
-chmod +x Install-cli.sh
-./Install-cli.sh
-```
+Buka [issue](https://github.com/ekiguistian/Interaktif_Install-Unbound/issues) untuk laporan bug atau usulan. Sertakan versi Ubuntu, tahap yang gagal, langkah reproduksi, dan log yang sudah disamarkan. Gunakan pull request untuk perubahan kode atau dokumentasi. Panduan pemeriksaan tersedia di [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Jalankan `git clone` dan installer sebagai akun yang memiliki hak sudo, atau lanjutkan sebagai `root`. Installer memeriksa dependensi terlebih dahulu. Jika semuanya sudah tersedia, APT tidak diperbarui dan paket tidak dipasang ulang. Jika ada yang kurang, installer menjalankan `apt-get update` lalu memasang paket yang belum tersedia.
+## Donasi
 
-## Alur installer
-
-1. Memeriksa versi OS, CPU, RAM, dan ruang kosong di `/var`. Host di bawah minimum akan dihentikan sebelum perubahan dilakukan.
-2. Memeriksa dependensi wajib: Unbound, paket `unbound-anchor`, Python 3, curl, Git, UFW, dnsutils, sudo, Zabbix Agent, dan root hints. Dependensi yang sudah tersedia hanya diperiksa. Jika ada yang kurang, installer memperbarui indeks APT dan memasang yang belum tersedia. Repository resmi Zabbix ditambahkan jika paket Agent tidak tersedia di APT distro.
-3. Memeriksa `/etc/unbound/unbound.conf` yang sudah ada dengan `unbound-checkconf` dan melaporkan status service. Konfigurasi yang tidak valid dapat diperbaiki dari menu **Generate / Perbaiki unbound.conf**.
-4. Meminta jenis server, alamat interface, jaringan yang boleh mengakses DNS, resource, PTR, upstream, logging, blocklist/whitelist, Zabbix, dan aturan SSH.
-5. Menampilkan ringkasan untuk diperiksa sebelum konfigurasi diterapkan.
-6. Membuat konfigurasi, memvalidasi dengan `unbound-checkconf`, memasang Unbound, dan mengatur UFW.
-7. Menguji query Internet melalui Unbound, validasi DNSSEC, dan alamat interface setelah firewall aktif.
-8. Menyelesaikan pengaturan resolver sesuai jenis server.
-
-Jika validasi konfigurasi atau pemeriksaan DNS gagal, installer melaporkan masalah dan memulihkan konfigurasi Unbound sebelumnya bila tersedia.
-
-Jika proses gagal atau menu dibatalkan, installer menghapus paket yang baru dipasang pada percobaan itu dan memulihkan file sistem, resolver, firewall, serta status service seperti sebelum dijalankan. Paket yang sudah ada sebelumnya tidak dihapus. Jika perangkat mati sebelum rollback selesai, data pemulihan disimpan dan dicoba kembali saat installer dijalankan lagi.
-
-## Resolver setelah pemasangan
-
-**Virtual machine:** setelah semua pemeriksaan berhasil, installer mengatur `/etc/resolv.conf` ke `127.0.0.1`, menguji query host, dan menyimpan cadangan resolver sebelumnya.
-
-**LXC Proxmox:** installer tidak mengubah resolver container. Setelah status pemasangan berhasil, gunakan IP interface yang ditampilkan installer sebagai DNS container di Proxmox.
-
-## Fitur DNS
-
-- Root recursion atau forwarder; tersedia mode root dengan forwarder fallback.
-- Root hints dan validasi DNSSEC.
-- TLD publik, termasuk `.id`, di-resolve otomatis dalam mode root.
-- Forwarder bawaan `1.1.1.1` dan `8.8.8.8`; alamat dapat diganti saat setup.
-- Cache, prefetch, serve-expired, PTR, dan pilihan logging.
-- Blocklist dan whitelist dari URL HTTPS, dengan pembaruan harian.
-- Zabbix Agent untuk statistik Unbound jika monitoring dipilih.
-
-Untuk domain internal, tambahkan zona yang sesuai ke `/etc/unbound/unbound.conf`, lalu validasi dan restart Unbound.
-
-## Menghapus instalasi
-
-Jalankan uninstaller dari folder repository sebagai `root` atau gunakan `sudo`:
-
-```bash
-sudo ./Uninstall.sh
-```
-
-Uninstaller menampilkan urutan tindakan dan meminta konfirmasi dengan mengetik `HAPUS`. Proses menghentikan Unbound, Zabbix Agent, dan timer blocklist; memulihkan resolver dari cadangan bila tersedia; mereset aturan UFW dan menonaktifkan firewall; mem-purge paket Unbound, `unbound-anchor`, Zabbix Agent, root hints, dan dnsperf; lalu menghapus konfigurasi, data, kunci DNSSEC, file integrasi, hasil benchmark, dan hasil konfigurasi lokal. Jika resolver masih menunjuk ke `127.0.0.1` tanpa cadangan, masukkan DNS IPv4 pengganti sebelum uninstall berjalan.
-
-Setelah selesai, script menampilkan status paket, service, file konfigurasi, firewall, resolver, dan tes DNS. Jika ada tahap yang gagal, tahap tersebut dicantumkan di hasil akhir. Paket umum `sudo`, Python 3, curl, Git, dnsutils, dan UFW tetap terpasang agar kebutuhan OS lain tidak ikut terhapus. Aturan UFW akan dihapus dan firewall dinonaktifkan.
-
-## Melihat log query DNS
-
-Aktifkan pilihan **logging** saat instalasi agar Unbound menulis query dan jawaban ke syslog. Untuk melihat log yang terus masuk:
-
-```bash
-sudo journalctl -t unbound -f
-```
-
-Untuk log satu jam terakhir:
-
-```bash
-sudo journalctl -t unbound --since "1 hour ago"
-```
-
-Untuk melihat status start, stop, atau error service:
-
-```bash
-sudo journalctl -u unbound -n 100 --no-pager
-```
-
-Periksa apakah pencatatan query dan jawaban aktif:
-
-```bash
-sudo grep -E '^[[:space:]]*(use-syslog|log-queries|log-replies|log-tag-queryreply):' /etc/unbound/unbound.conf
-```
-
-`log-queries` mencatat alamat klien, nama domain, tipe, dan kelas query. `log-replies` juga mencatat kode hasil dan waktu resolusi. Catatan ini memuat data aktivitas DNS dan dapat memperlambat resolver; matikan logging setelah pemeriksaan jika tidak diperlukan. Lihat [dokumentasi konfigurasi Unbound](https://nlnetlabs.nl/documentation/unbound/unbound.conf/) dan [manual journalctl](https://www.freedesktop.org/software/systemd/man/latest/journalctl.html).
-
-## Menguji server dengan dnsperf
-
-Jalankan dari server Unbound:
-
-```bash
-./Tes.sh
-```
-
-Jalankan sebagai pengguna yang memiliki hak sudo agar file hasil tidak menjadi milik root. Jika `dnsperf` atau `dig` belum terpasang, script memperbarui indeks APT lalu memasang paket yang kurang. Pada Ubuntu, script mengaktifkan Universe bila paket dnsperf belum tersedia. Script memastikan service Unbound aktif dan `127.0.0.1` dapat menjawab query, kemudian menyalin daftar 100 domain umum ke folder hasil lokal. Daftar sumbernya ada di `src/dnsperf-domains.txt`.
-
-Script memanaskan cache dengan satu putaran query, lalu menjalankan dnsperf ke `127.0.0.1:53`. Durasi awal adalah 300 detik dan tidak bisa diatur lebih dari 5 menit. Nilai awal client dan pasangan thread mengikuti jumlah core CPU yang terdeteksi; pengguna boleh memasukkan angka lebih besar. Script tidak membatasi jumlah client, thread, atau query per detik. Sebelum mulai, script menampilkan rencana uji dan meminta konfirmasi `MULAI`.
-
-Tes penuh dapat menghabiskan CPU dan membuat query DNS klien lain melambat selama pengujian. Jalankan pada waktu sepi. Script menampilkan jumlah query terkirim, jawaban, query hilang, kecepatan rata-rata, dan latensi. Log lengkap dan daftar query tersimpan di `dnsperf-results/`. Daftar 100 domain ini cocok untuk pemeriksaan singkat, bukan untuk menentukan kapasitas maksimum server. Script tidak mengosongkan cache atau mengubah konfigurasi Unbound. Rujuk [manual dnsperf Debian](https://manpages.debian.org/bookworm/dnsperf/dnsperf.1.en.html) untuk arti client, thread, durasi, dan metrik.
-
-## Firewall
-
-Installer mereset aturan UFW yang ada, lalu menetapkan deny incoming dan deny outgoing. Port yang dibuka:
-
-- DNS TCP/UDP 53, masuk dan keluar
-- HTTPS TCP 443, masuk dan keluar
-- SSH TCP 22, masuk dan keluar; sumber IP dapat dibatasi
-- Jika Zabbix dipilih: TCP 10050 dari server Zabbix dan TCP 10051 ke server Zabbix
-
-Periksa sumber IP SSH sebelum menyetujui ringkasan. Aturan lama dihapus saat UFW diatur ulang. IP Allow awal adalah `192.168.1.0/24`, sehingga hanya klien pada subnet privat tersebut yang dapat memakai resolver. Ubah nilainya bila LAN menggunakan subnet lain.
-
-## File hasil
-
-- `unbound.conf` di direktori kerja dan `/etc/unbound/unbound.conf`
-- `/etc/unbound/blocklist/` jika blocklist/whitelist digunakan
-- Konfigurasi Zabbix di `/etc/zabbix/zabbix_agentd.conf` jika monitoring digunakan
-- Cadangan konfigurasi sistem dengan akhiran `.bak.<waktu>`
+Jika ingin mendukung pengembangan, hubungi [pengelola proyek](https://github.com/ekiguistian) untuk informasi donasi. Bantuan lewat laporan bug, pengujian, atau perbaikan dokumentasi juga diterima.

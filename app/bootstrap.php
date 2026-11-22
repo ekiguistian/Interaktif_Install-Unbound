@@ -7,7 +7,7 @@ const APP_ENV_FILE = '/etc/unbound-web/.env';
 function load_app_env(string $file): array
 {
     if (!is_file($file) || !is_readable($file)) {
-        throw new RuntimeException('File konfigurasi /etc/unbound-web/.env belum tersedia. Ikuti instruksi installer untuk membuatnya.');
+        throw new RuntimeException('File konfigurasi /etc/unbound-web/.env belum tersedia. Jalankan kembali install.sh untuk menyiapkan aplikasi.');
     }
 
     $values = [];

@@ -64,6 +64,23 @@ ui_header() {
     ui_info "Kernel: $kernel | Arsitektur: $architecture"
 }
 
+require_ubuntu_jammy() (
+    if [[ ! -r /etc/os-release ]]; then
+        ui_error 'Informasi sistem operasi tidak ditemukan.'
+        return 1
+    fi
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    if [[ "${ID:-}" != ubuntu || "${VERSION_ID:-}" != 22.04 || "${VERSION_CODENAME:-}" != jammy ]]; then
+        ui_error "Script ini hanya mendukung Ubuntu Server 22.04 LTS (Jammy). Terdeteksi: ${PRETTY_NAME:-tidak diketahui}."
+        return 1
+    fi
+    if [[ ! -d /run/systemd/system ]] || ! command -v systemctl >/dev/null 2>&1; then
+        ui_error 'Jalankan di Ubuntu dengan systemd aktif.'
+        return 1
+    fi
+)
+
 # Run a long command without mixing its output with the spinner. LOG_FILE keeps
 # the original output; MODE is tail, full, or quiet. Failures always show the log.
 ui_run_with_spinner() {

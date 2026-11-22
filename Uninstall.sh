@@ -308,6 +308,7 @@ main() {
     local confirmation
     ui_init
     ui_header "$APP_NAME"
+    require_ubuntu_jammy || return 1
     if (( EUID != 0 )); then
         if ! command -v sudo >/dev/null 2>&1; then
             error 'Jalankan sebagai root. sudo tidak tersedia.'
@@ -316,7 +317,7 @@ main() {
         sudo -v || { error 'Hak sudo tidak tersedia.'; exit 1; }
     fi
     if ! command -v apt-get >/dev/null 2>&1 || ! command -v dpkg-query >/dev/null 2>&1; then
-        error 'Installer ini memerlukan APT dan dpkg (Ubuntu/Debian).'
+        error 'Uninstaller membutuhkan APT dan dpkg pada Ubuntu.'
         exit 1
     fi
 

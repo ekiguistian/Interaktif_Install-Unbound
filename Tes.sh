@@ -33,7 +33,6 @@ run_apt_with_spinner() {
 
 install_missing_packages() {
     local -a missing=()
-    local os_id=''
     command -v dig >/dev/null 2>&1 || missing+=(dnsutils)
     command -v dnsperf >/dev/null 2>&1 || missing+=(dnsperf)
     if ((${#missing[@]} == 0)); then
@@ -54,9 +53,7 @@ install_missing_packages() {
     info "Dependensi yang belum tersedia: ${missing[*]}"
     run_apt_with_spinner 'Memperbarui indeks APT' apt-get update
     if [[ " ${missing[*]} " == *' dnsperf '* ]]; then
-        [[ -r /etc/os-release ]] && . /etc/os-release
-        os_id="${ID:-}"
-        if [[ "$os_id" == ubuntu ]] && ! apt-cache show dnsperf >/dev/null 2>&1; then
+        if ! apt-cache show dnsperf >/dev/null 2>&1; then
             info 'Paket dnsperf belum terlihat di APT Ubuntu; mengaktifkan Universe.'
             if ! command -v add-apt-repository >/dev/null 2>&1; then
                 run_apt_with_spinner 'Memasang dukungan repository Ubuntu' apt-get install -y --no-upgrade software-properties-common
@@ -164,6 +161,7 @@ main() {
     local test_status=0 dns_output dnssec_output confirmation
     ui_init
     ui_header "$APP_NAME"
+    require_ubuntu_jammy || return 1
     process "Pengujian berjalan dari server yang sama ke $SERVER_IP:$SERVER_PORT."
     process 'Daftar query berisi 100 domain umum dengan tipe record A.'
     CPU_CORES="$(detect_cpu_cores)"

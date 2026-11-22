@@ -88,13 +88,13 @@ try {
         $args[] = '-Q';
         $args[] = $qps;
     }
-    $exit = streamDnsperf($args);
-    exit($exit);
+    $exitCode = streamDnsperf($args);
 } catch (Throwable $error) {
     fwrite(STDERR, $error->getMessage() . "\n");
-    exit(1);
+    $exitCode = 1;
 } finally {
     if (is_string($file) && is_file($file)) {
         unlink($file);
     }
 }
+exit($exitCode);

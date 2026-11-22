@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set +x
 set -Eeuo pipefail
 
 APP_NAME='Unbound DNS Web Manager'
@@ -7,8 +8,6 @@ ENV_DIR='/etc/unbound-web'
 ENV_FILE="$ENV_DIR/.env"
 WEB_USER='www-data'
 MYSQL_DB='unbound_web'
-MYSQL_USER='unbound_web'
-MYSQL_PASSWORD=''
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 red=$'\033[31m'; green=$'\033[32m'; blue=$'\033[34m'; reset=$'\033[0m'
@@ -35,6 +34,7 @@ info "Sistem operasi: ${PRETTY_NAME:-$OS_ID} | Kernel: $(uname -r) | Arsitektur:
 [[ "$OS_ID" == ubuntu && "${VERSION_ID:-}" == 22.04 && "$OS_CODENAME" == jammy ]] || die "OS tidak didukung: ${PRETTY_NAME:-$OS_ID}. Aplikasi ini hanya mendukung Ubuntu Server 22.04 LTS (Jammy)."
 [[ "$(dpkg --print-architecture)" == amd64 || "$(dpkg --print-architecture)" == arm64 ]] || die 'Arsitektur yang didukung: amd64 dan arm64.'
 command -v apt-get >/dev/null 2>&1 || die 'APT tidak tersedia.'
+[[ -d /run/systemd/system ]] || die 'Jalankan pada Ubuntu dengan systemd aktif.'
 CPU_CORES="$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '0')"
 RAM_MB="$(awk '/^MemTotal:/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || printf '0')"
 VAR_FREE_MB="$(df -Pm /var 2>/dev/null | awk 'NR==2 {print $4}')"
@@ -59,44 +59,95 @@ fi
 exec 9>/run/lock/unbound-web-install.lock
 flock -n 9 || die 'Installer lain sedang berjalan.'
 
+prepare_legacy_mysql_source() {
+    local source_file='/etc/apt/sources.list.d/mysql.list'
+    local keyring='/usr/share/keyrings/mysql-apt.gpg'
+    local legacy_entry="deb [signed-by=$keyring] https://repo.mysql.com/apt/ubuntu/ jammy mysql-8.4-lts"
+    local community_states source_entries
+
+    # The former installer wrote exactly this line. Leave other APT sources alone.
+    [[ -f "$source_file" && ! -L "$source_file" ]] || return 0
+    source_entries="$(awk '{sub(/[[:space:]]*#.*/, ""); if (NF) {$1=$1; print}}' "$source_file")"
+    [[ "$source_entries" == "$legacy_entry" ]] || return 0
+    community_states="$(dpkg-query -W -f='${db:Status-Status}\n' 'mysql-community-*' 2>/dev/null || true)"
+    if ! grep -qxE 'installed|unpacked|half-installed|half-configured|triggers-awaited|triggers-pending' <<< "$community_states"; then
+        mv -T --backup=numbered -- "$source_file" "$source_file.unbound-web.disabled"
+        info 'Repository MySQL lama dicadangkan. Instalasi baru memakai paket MySQL Ubuntu.'
+        return
+    fi
+
+    step 'Memeriksa kunci repository MySQL Community yang masih digunakan.'
+    command -v curl >/dev/null && command -v gpg >/dev/null && command -v gpgv >/dev/null ||
+        die 'Pembaruan keyring MySQL Community membutuhkan curl, gpg, dan gpgv. Alat dari instalasi lama tidak lengkap.'
+    (
+        local workdir fingerprint expires pending_key=''
+        workdir="$(mktemp -d)"
+        trap 'if [[ -n "$pending_key" ]]; then rm -f -- "$pending_key"; fi; rm -rf -- "$workdir"' EXIT
+        curl -fsSL --proto '=https' --proto-redir '=https' --max-time 60 \
+            https://repo.mysql.com/apt/ubuntu/dists/jammy/InRelease -o "$workdir/InRelease"
+
+        if [[ -r "$keyring" ]] &&
+            gpgv --status-fd 1 --keyring "$keyring" "$workdir/InRelease" 2>/dev/null |
+            awk '/^\[GNUPG:\] (EXPKEYSIG|EXPSIG|REVKEYSIG|BADSIG) / {bad=1}
+                /^\[GNUPG:\] VALIDSIG / {valid=1} END {exit !(valid && !bad)}'; then
+            exit 0
+        fi
+
+        curl -fsSL --proto '=https' --proto-redir '=https' --max-time 60 \
+            https://repo.mysql.com/RPM-GPG-KEY-mysql-2025 -o "$workdir/mysql.asc"
+        fingerprint="$(gpg --homedir "$workdir" --batch --with-colons --show-keys "$workdir/mysql.asc" |
+            awk -F: '$1=="pub" {primary=1} $1=="fpr" && primary {print $10; primary=0}')"
+        [[ "$fingerprint" == BCA43417C3B485DD128EC6D4B7B3B788A8D3785C ]] ||
+            die 'Fingerprint kunci MySQL tidak cocok dengan kunci rilis Oracle.'
+        expires="$(gpg --homedir "$workdir" --batch --with-colons --show-keys "$workdir/mysql.asc" |
+            awk -F: '$1=="pub" {print $7}')"
+        [[ "$expires" =~ ^[0-9]+$ ]] && ((expires > $(date +%s))) || die 'Kunci rilis MySQL sudah kedaluwarsa.'
+        gpg --homedir "$workdir" --batch --dearmor -o "$workdir/mysql.gpg" "$workdir/mysql.asc"
+        gpgv --keyring "$workdir/mysql.gpg" "$workdir/InRelease" ||
+            die 'Tanda tangan repository MySQL gagal diverifikasi.'
+        pending_key="$(mktemp "${keyring}.XXXXXX")"
+        install -o root -g root -m 0644 "$workdir/mysql.gpg" "$pending_key"
+        mv -T -- "$pending_key" "$keyring"
+        info 'Keyring MySQL Community diperbarui. Paket dan database yang ada dipertahankan.'
+    )
+}
+
+prepare_legacy_mysql_source
+
 step 'Memperbarui indeks APT dan memasang alat dasar.'
 export DEBIAN_FRONTEND=noninteractive
-apt-get update
-apt-get install -y --no-install-recommends ca-certificates curl gnupg lsb-release sudo nginx openssl dnsperf dnsutils ufw cron logrotate software-properties-common git
+apt-get update --allow-releaseinfo-change-label
+apt-get install -y --no-install-recommends ca-certificates curl iproute2 openssl software-properties-common
 
-if [[ "$OS_ID" == ubuntu ]] && ! apt-cache show dnsperf >/dev/null 2>&1; then
-    apt-get install -y --no-install-recommends software-properties-common
+if ! apt-cache show dnsperf >/dev/null 2>&1; then
     add-apt-repository --yes universe
     apt-get update
 fi
 apt-cache show dnsperf >/dev/null 2>&1 || die 'Paket dnsperf tidak tersedia pada repository aktif.'
 
-if ! grep -Rqs 'ondrej/php' /etc/apt/sources.list.d /etc/apt/sources.list 2>/dev/null; then
-    step 'Menambahkan PPA ondrej/php untuk PHP 8.4 pada Ubuntu 22.04.'
-    add-apt-repository --yes ppa:ondrej/php
+if ! grep -qsE '^[[:space:]]*(deb[[:space:]]|URIs:).*https://packages\.sury\.org/php/?([[:space:]]|$)' \
+    /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; then
+    step 'Menambahkan repository PHP Surý untuk Ubuntu 22.04.'
+    keyring_dir="$(mktemp -d)"
+    if ! curl -fsSL --proto '=https' --proto-redir '=https' --max-time 60 \
+        https://packages.sury.org/debsuryorg-archive-keyring.deb -o "$keyring_dir/debsuryorg-archive-keyring.deb" ||
+        ! dpkg -i "$keyring_dir/debsuryorg-archive-keyring.deb"; then
+        rm -f -- "$keyring_dir/debsuryorg-archive-keyring.deb"
+        rmdir -- "$keyring_dir"
+        die 'Keyring repository PHP gagal dipasang.'
+    fi
+    rm -f -- "$keyring_dir/debsuryorg-archive-keyring.deb"
+    rmdir -- "$keyring_dir"
+    printf 'deb [signed-by=/usr/share/keyrings/debsuryorg-archive-keyring.gpg] https://packages.sury.org/php/ %s main\n' \
+        "$OS_CODENAME" > /etc/apt/sources.list.d/unbound-web-php.list
     apt-get update
 fi
 apt-cache show php8.4-fpm >/dev/null 2>&1 || die 'Paket PHP 8.4 tidak tersedia dari repository yang aktif.'
 
-if [[ "$MYSQL_SERVER_PRESENT" != yes ]]; then
-    step 'Menyiapkan repository MySQL Community 8.4 LTS.'
-    mysql_key_tmp="$(mktemp /tmp/mysql-keyring.XXXXXX.gpg)"
-    curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
-        https://repo.mysql.com/RPM-GPG-KEY-mysql-2023 | gpg --dearmor --yes -o "$mysql_key_tmp"
-    install -o root -g root -m 0644 "$mysql_key_tmp" /usr/share/keyrings/mysql-apt.gpg
-    rm -f -- "$mysql_key_tmp"
-    printf 'deb [signed-by=/usr/share/keyrings/mysql-apt.gpg] https://repo.mysql.com/apt/%s/ %s mysql-8.4-lts\n' \
-        "$OS_ID" "$OS_CODENAME" > /etc/apt/sources.list.d/mysql.list
-    apt-get update
-    apt-cache show mysql-server >/dev/null 2>&1 || die 'Paket MySQL Server tidak ditemukan pada repository resmi.'
-else
-    info 'MySQL Server sudah ditemukan. Repository dan database yang ada tidak diganti.'
-fi
-
 step 'Memasang PHP 8.4, Nginx, MySQL Server, dnsperf, Git, dan build dependencies Unbound.'
 packages=(php8.4-fpm php8.4-mysql php8.4-cli php8.4-curl php8.4-mbstring php8.4-xml dnsperf dnsutils nginx ufw sudo cron git)
 packages+=(logrotate)
-packages+=(build-essential libssl-dev libexpat1-dev libevent-dev bison flex wget)
+packages+=(build-essential pkg-config libssl-dev libexpat1-dev libevent-dev bison flex wget)
 [[ "$MYSQL_SERVER_PRESENT" == yes ]] || packages+=(mysql-server)
 apt-get install -y --no-install-recommends "${packages[@]}"
 php8.4 -r 'exit(PHP_VERSION_ID >= 80400 && extension_loaded("pdo_mysql") && extension_loaded("curl") && extension_loaded("mbstring") && extension_loaded("xml") ? 0 : 1);' || die 'PHP 8.4 atau extension wajib belum siap.'
@@ -120,18 +171,71 @@ find "$APP_DIR" -type f -exec chmod 0644 {} +
 install -o root -g root -m 0750 "$SCRIPT_DIR/scripts/manage.sh" /usr/local/sbin/unbound-web-manage
 
 systemctl enable --now mysql
-if [[ -r "$ENV_FILE" ]]; then
-    MYSQL_PASSWORD="$(sed -n 's/^DB_PASS=//p' "$ENV_FILE" | head -n 1 | tr -d '\r\n\"')"
-    [[ "$MYSQL_PASSWORD" =~ ^[A-Fa-f0-9]{32,128}$ ]] || die "DB_PASS yang sudah ada di $ENV_FILE bukan kata sandi hex yang dibuat installer. Database tidak diubah."
-else
-    MYSQL_PASSWORD="$(openssl rand -hex 32)"
+route_address() {
+    ip "-$1" route get "$2" 2>/dev/null | awk 'NR==1 {
+        for (i=1; i<NF; i++) {
+            if ($i=="dev") device=$(i+1)
+            if ($i=="src") address=$(i+1)
+        }
+        if (device!="" && address!="") print device, address
+    }'
+}
+network="$(route_address 4 1.1.1.1)" || network=''
+if [[ -z "$network" ]]; then network="$(route_address 6 2606:4700:4700::1111)" || network=''; fi
+if [[ -z "$network" ]]; then
+    network="$(ip -o addr show scope global up | awk 'NR==1 {sub(/@.*/,"",$2); sub(/\/.*/,"",$4); print $2, $4}')"
 fi
+[[ -n "$network" ]] || die 'Alamat IP jaringan server tidak ditemukan.'
+read -r NET_INTERFACE SERVER_IP <<< "$network"
+if [[ "$SERVER_IP" == *:* ]]; then SERVER_IP="[$SERVER_IP]"; fi
+
+if [[ ! -e "$ENV_FILE" ]]; then
+    MYSQL_USER="unbound_web_$(openssl rand -hex 4)"
+    MYSQL_PASSWORD="$(openssl rand -hex 10)"
+    ADMIN_PASSWORD="$(openssl rand -hex 24)"
+    env_tmp="$(mktemp "$ENV_DIR/.env.XXXXXX")"
+    (
+        trap 'rm -f -- "$env_tmp"' EXIT
+        printf '%s\n' 'DB_HOST=127.0.0.1' "DB_NAME=$MYSQL_DB" "DB_USER=$MYSQL_USER" \
+            "DB_PASS=$MYSQL_PASSWORD" 'ADMIN_USER=admin' "ADMIN_PASS=$ADMIN_PASSWORD" "NET_INTERFACE=$NET_INTERFACE" > "$env_tmp"
+        chown root:"$WEB_USER" "$env_tmp"
+        chmod 0640 "$env_tmp"
+        mv -T -- "$env_tmp" "$ENV_FILE"
+    )
+fi
+[[ -f "$ENV_FILE" && ! -L "$ENV_FILE" ]] || die "File konfigurasi $ENV_FILE tidak valid."
+chown root:"$WEB_USER" "$ENV_FILE"
+chmod 0640 "$ENV_FILE"
+config="$(php8.4 -r '
+    require $argv[1];
+    foreach (["DB_HOST", "DB_NAME", "DB_USER", "DB_PASS", "ADMIN_USER", "ADMIN_PASS"] as $key) {
+        $value = app_env($key);
+        if ($value === "" || strpbrk($value, "\r\n\0") !== false || str_starts_with($value, "replace_with_")) {
+            fwrite(STDERR, "Nilai $key pada .env tidak valid.\n");
+            exit(1);
+        }
+        echo $value, PHP_EOL;
+    }
+' -- "$APP_DIR/app/bootstrap.php")" || die 'Kredensial aplikasi tidak dapat dibaca.'
+mapfile -t settings <<< "$config"
+(("${#settings[@]}" == 6)) || die 'Kredensial aplikasi tidak lengkap.'
+MYSQL_HOST="${settings[0]}"
+MYSQL_DB="${settings[1]}"
+MYSQL_USER="${settings[2]}"
+MYSQL_PASSWORD="${settings[3]}"
+ADMIN_USER="${settings[4]}"
+ADMIN_PASSWORD="${settings[5]}"
+[[ "$MYSQL_DB" =~ ^[A-Za-z0-9_]{1,64}$ && "$MYSQL_USER" =~ ^[A-Za-z0-9_]{1,32}$ ]] || die 'Nama database atau pengguna MySQL tidak valid.'
+[[ "$MYSQL_HOST" == 127.0.0.1 || "$MYSQL_HOST" == localhost ]] || die 'Installer membutuhkan MySQL lokal.'
+[[ "$MYSQL_USER" != root ]] || die 'Gunakan akun MySQL khusus aplikasi.'
+case "${MYSQL_DB,,}" in mysql|sys|information_schema|performance_schema) die 'Gunakan database khusus aplikasi.' ;; esac
+# NO_BACKSLASH_ESCAPES plus doubled quotes preserves an existing password safely.
+sql_password="${MYSQL_PASSWORD//\'/\'\'}"
 mysql --protocol=socket --user=root <<SQL
+SET SESSION sql_mode = 'NO_BACKSLASH_ESCAPES';
 CREATE DATABASE IF NOT EXISTS \`$MYSQL_DB\` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
-CREATE USER IF NOT EXISTS '$MYSQL_USER'@'127.0.0.1' IDENTIFIED BY '$MYSQL_PASSWORD';
-ALTER USER '$MYSQL_USER'@'127.0.0.1' IDENTIFIED BY '$MYSQL_PASSWORD';
-GRANT ALL PRIVILEGES ON \`$MYSQL_DB\`.* TO '$MYSQL_USER'@'127.0.0.1';
-FLUSH PRIVILEGES;
+CREATE USER IF NOT EXISTS '$MYSQL_USER'@'$MYSQL_HOST' IDENTIFIED BY '$sql_password';
+GRANT SELECT, INSERT, UPDATE, DELETE ON \`$MYSQL_DB\`.* TO '$MYSQL_USER'@'$MYSQL_HOST';
 SQL
 mysql --protocol=socket --user=root "$MYSQL_DB" < "$APP_DIR/database/schema.sql"
 while IFS='|' read -r column definition; do
@@ -198,9 +302,6 @@ cat > /etc/logrotate.d/unbound-web <<'LOGROTATE'
 LOGROTATE
 chmod 0644 /etc/logrotate.d/unbound-web
 
-systemctl enable --now php8.4-fpm nginx
-systemctl enable --now cron
-
 step 'Membuat virtual host Nginx di port 8000.'
 nginx_site='/etc/nginx/sites-available/unbound-web'
 if [[ -e "$nginx_site" ]]; then cp -a "$nginx_site" "$nginx_site.bak.$(date +%Y%m%d%H%M%S)"; fi
@@ -240,33 +341,25 @@ server {
 NGINX
 ln -sfn "$nginx_site" /etc/nginx/sites-enabled/unbound-web
 nginx -t
+php-fpm8.4 -t
+systemctl enable --now php8.4-fpm nginx cron ufw logrotate.timer
 systemctl reload nginx
 
 step 'Menjalankan pemeriksaan akhir.'
-php-fpm8.4 -t
-systemctl is-active --quiet mysql
-systemctl is-active --quiet nginx
-systemctl is-active --quiet php8.4-fpm
-systemctl is-active --quiet cron
+for unit in mysql php8.4-fpm nginx cron ufw logrotate.timer; do
+    systemctl is-enabled --quiet "$unit" && systemctl is-active --quiet "$unit" ||
+        die "Layanan $unit belum aktif atau belum diaktifkan saat boot."
+done
+sudo -u "$WEB_USER" /usr/bin/sudo -n /usr/local/sbin/unbound-web-manage service-status >/dev/null ||
+    die 'Aplikasi tidak dapat menjalankan helper sistem.'
+check_url='http://127.0.0.1:8000'
+curl -fsS --noproxy '*' --max-time 10 "$check_url/" -o /dev/null || die 'Live Monitor gagal dibuka.'
+curl -fsS --noproxy '*' --max-time 10 "$check_url/login" -o /dev/null || die 'Halaman login gagal dibuka.'
+if ! curl -fsS --noproxy '*' --max-time 15 "$check_url/api/metrics" | php8.4 -r '
+    $status = json_decode(stream_get_contents(STDIN), true);
+    exit(($status["ok"] ?? false) === true ? 0 : 1);
+'; then
+    die 'Aplikasi tidak dapat membaca database melalui API metrik.'
+fi
 
-SERVER_IP="$(hostname -I | awk '{for (i=1;i<=NF;i++) if ($i !~ /^127\./ && $i !~ /^fe80:/) {print $i; exit}}')"
-[[ -n "$SERVER_IP" ]] || SERVER_IP='<IP-SERVER>'
-
-printf '\n%s============================================================%s\n' "$green" "$reset"
-printf '%s %s%s\n' "$APP_NAME" ''
-printf '%s============================================================%s\n' "$green" "$reset"
-printf 'Direktori aplikasi : %s\n' "$APP_DIR"
-printf 'Document root      : %s/public\n' "$APP_DIR"
-printf 'File .env          : %s\n' "$ENV_FILE"
-printf 'URL aplikasi       : http://%s:8000\n' "$SERVER_IP"
-printf '\nSalin template dan atur permission file konfigurasi:\n'
-printf '  install -d -o root -g www-data -m 0750 %s\n' "$ENV_DIR"
-printf '  cp %s/.env.example %s\n' "$APP_DIR" "$ENV_FILE"
-printf '  nano %s\n' "$ENV_FILE"
-printf '  chown root:www-data %s && chmod 0640 %s\n' "$ENV_FILE" "$ENV_FILE"
-printf '\nIsi %s/.env.example:\n' "$APP_DIR"
-cat "$APP_DIR/.env.example"
-printf '\nNilai DB_PASS untuk diisi pada file .env:\nDB_PASS=%s\n' "$MYSQL_PASSWORD"
-printf 'Isi ADMIN_USER, ADMIN_PASS dengan password panjang, serta NET_INTERFACE dengan interface server.\n'
-printf 'Setelah .env disimpan, buka URL aplikasi dan login menggunakan kredensial admin tersebut.\n'
-printf 'Unbound dan Zabbix Agent belum dipasang. Keduanya dikelola dari aplikasi web.\n'
+printf '\nURL      : http://%s:8000\nUsername : %s\nPassword : %s\n' "$SERVER_IP" "$ADMIN_USER" "$ADMIN_PASSWORD"

@@ -1,25 +1,24 @@
 # Kontribusi
 
-Laporan bug dan perbaikan sangat membantu. Gunakan issue untuk menjelaskan masalah, lalu ajukan perubahan melalui pull request.
+## Lapor bug atau usulkan fitur
 
-## Laporan masalah
+Buka issue dan jelaskan masalah atau usulannya. Untuk laporan bug, sertakan hal berikut.
 
-Sertakan:
+- Versi Ubuntu 22.04 yang digunakan.
+- Nama halaman atau script dan tahap saat masalah muncul.
+- Langkah untuk mengulang masalah.
+- Pesan error atau log yang sudah disamarkan.
 
-- versi Ubuntu atau Debian;
-- nama script dan tahap saat masalah muncul;
-- pesan error lengkap yang sudah disamarkan;
-- langkah untuk mengulang masalah.
+Ganti IP dan domain dengan contoh seperti `192.168.1.10` dan `yourdomain.com`. Hapus password, token, private key, hostname produksi, dan URL privat dari log. Untuk celah keamanan, ikuti [SECURITY.md](SECURITY.md).
 
-Ganti alamat server dengan `192.168.1.10`, domain dengan `yourdomain.com`, dan hapus password, token, private key, hostname produksi, serta URL daftar privat sebelum mengirim log.
+## Kirim perubahan
 
-## Perubahan kode
+- Ajukan perubahan melalui pull request.
+- Web Manager dan CLI menargetkan Ubuntu Server 22.04 LTS. Lihat [CLI.md](CLI.md) untuk panduan tool terminal.
+- Gunakan nilai contoh yang umum. Simpan kredensial dan konfigurasi produksi di luar repo.
+- Perbarui panduan terkait jika langkah instalasi, pilihan, atau dependensi berubah.
 
-- Web Manager hanya menargetkan Ubuntu Server 22.04 LTS (Jammy). Pertahankan dukungan CLI yang didokumentasikan terpisah.
-- Jangan menambahkan IP, domain, credential, URL whitelist pribadi, atau nilai konfigurasi milik satu organisasi sebagai default.
-- Untuk contoh konfigurasi, gunakan IP privat kelas C seperti `192.168.1.10` dan domain `yourdomain.com`.
-- Sertakan perubahan README bila alur, pilihan, atau kebutuhan paket berubah.
-- Untuk perubahan script Bash, jalankan pemeriksaan sintaks dan whitespace sebelum mengirim pull request:
+Jalankan pemeriksaan yang sesuai dengan file yang diubah.
 
 ```bash
 bash -n install.sh
@@ -33,4 +32,4 @@ node --check public/assets/app.js
 git diff --check
 ```
 
-Jelaskan hasil pemeriksaan yang dilakukan dan OS tempat pemeriksaan dijalankan.
+Sebutkan hasil pemeriksaan dan OS yang dipakai di pull request.

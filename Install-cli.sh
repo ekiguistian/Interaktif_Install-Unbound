@@ -123,7 +123,7 @@ check_root_access() {
 
 refresh_apt_indexes() {
     if ! command -v apt-get >/dev/null 2>&1; then
-        error 'Package manager APT tidak ditemukan. Installer ini ditujukan untuk Ubuntu dan Debian.'
+        error 'APT tidak ditemukan pada sistem Ubuntu.'
         return 1
     fi
     local log_file
@@ -362,17 +362,8 @@ rollback_transaction() {
 }
 
 enable_official_zabbix_repository() {
-    local repository_package_url='' package_tmp
-    case "${ID:-}:${VERSION_ID:-}" in
-        ubuntu:24.04) repository_package_url='https://repo.zabbix.com/zabbix/8.0/release/ubuntu/pool/main/z/zabbix-release/zabbix-release_latest+ubuntu24.04_all.deb' ;;
-        ubuntu:26.04) repository_package_url='https://repo.zabbix.com/zabbix/8.0/release/ubuntu/pool/main/z/zabbix-release/zabbix-release_latest+ubuntu26.04_all.deb' ;;
-        debian:12) repository_package_url='https://repo.zabbix.com/zabbix/8.0/release/debian/pool/main/z/zabbix-release/zabbix-release_latest_8.0+debian12_all.deb' ;;
-        debian:13) repository_package_url='https://repo.zabbix.com/zabbix/8.0/release/debian/pool/main/z/zabbix-release/zabbix-release_latest_8.0+debian13_all.deb' ;;
-        *)
-            error "Repository Zabbix resmi belum disiapkan otomatis untuk ${PRETTY_NAME:-OS ini}."
-            return 1
-            ;;
-    esac
+    local package_tmp
+    local repository_package_url='https://repo.zabbix.com/zabbix/7.0/ubuntu/pool/main/z/zabbix-release/zabbix-release_latest_7.0%2Bubuntu22.04_all.deb'
 
     if ! command -v curl >/dev/null 2>&1; then
         install_packages curl ca-certificates || return 1
@@ -399,7 +390,7 @@ install_dependencies() {
     local missing=() zabbix_was_installed=no dependency
 
     if ! command -v apt-get >/dev/null 2>&1; then
-        error 'APT tidak tersedia; gunakan Ubuntu Server atau Debian yang didukung.'
+        error 'APT tidak tersedia pada sistem Ubuntu.'
         return 1
     fi
     if (( EUID != 0 )); then
@@ -428,7 +419,7 @@ install_dependencies() {
     fi
 
     # Zabbix Agent is mandatory. Ubuntu packages it in Universe on supported releases.
-    if [[ " ${missing[*]} " == *' zabbix-agent '* && "${ID:-}" == ubuntu ]] && ! apt-cache show zabbix-agent >/dev/null 2>&1; then
+    if [[ " ${missing[*]} " == *' zabbix-agent '* ]] && ! apt-cache show zabbix-agent >/dev/null 2>&1; then
         info 'Paket zabbix-agent belum terlihat di APT; mengaktifkan komponen Ubuntu Universe.'
         if ! command -v add-apt-repository >/dev/null 2>&1; then
             install_packages software-properties-common || warn 'Komponen Universe tidak dapat diaktifkan; installer akan mencoba repository resmi Zabbix.'
@@ -491,41 +482,6 @@ check_existing_unbound_configuration() {
     else
         warn 'Service Unbound tidak aktif. Status akan diperiksa kembali setelah konfigurasi diterapkan.'
     fi
-}
-
-check_supported_os() {
-    local os_id os_version
-    if [[ ! -r /etc/os-release ]]; then
-        error 'File /etc/os-release tidak ditemukan.'
-        exit 1
-    fi
-    # shellcheck disable=SC1091
-    . /etc/os-release
-    os_id="${ID:-}"
-    os_version="${VERSION_ID:-}"
-    if ! command -v systemctl >/dev/null 2>&1; then
-        error 'systemctl tidak ditemukan; installer memerlukan systemd.'
-        exit 1
-    fi
-    case "$os_id" in
-        ubuntu)
-            if ! dpkg --compare-versions "$os_version" ge '24.04'; then
-                error "OS anda dibawah minimum spesifikasi: Ubuntu $os_version. Perbarui terlebih dahulu ke Ubuntu Server 24.04 atau lebih baru."
-                exit 1
-            fi
-            ;;
-        debian)
-            if ! dpkg --compare-versions "$os_version" ge '12'; then
-                error "OS anda dibawah minimum spesifikasi: Debian $os_version. Perbarui terlebih dahulu ke Debian 12 atau lebih baru."
-                exit 1
-            fi
-            ;;
-        *)
-        error "OS anda dibawah minimum spesifikasi atau belum didukung ('$os_id'). Perbarui terlebih dahulu atau gunakan Ubuntu Server 24.04+ atau Debian 12+."
-            exit 1
-            ;;
-    esac
-    info "OS terdeteksi: $PRETTY_NAME $os_version"
 }
 
 check_minimum_host() {
@@ -1441,7 +1397,7 @@ main() {
     ui_init
     ui_header "$APP_NAME"
     process 'Tahap 1: validasi OS dan resource minimum host sebelum perubahan dilakukan.'
-    check_supported_os
+    require_ubuntu_jammy || return 1
     check_minimum_host
     check_root_access
     begin_transaction

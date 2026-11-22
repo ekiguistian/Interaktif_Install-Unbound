@@ -11,6 +11,12 @@ LOG_DIR='/var/log/unbound-web'
 info() { printf '[INFO] %s\n' "$*"; }
 fail() { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
 [[ $EUID -eq 0 ]] || fail 'Management helper harus dijalankan melalui sudo.'
+[[ -r /etc/os-release ]] || fail 'Informasi sistem operasi tidak ditemukan.'
+# shellcheck disable=SC1091
+. /etc/os-release
+[[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == 22.04 && "${VERSION_CODENAME:-}" == jammy ]] ||
+    fail "Web Manager hanya mendukung Ubuntu Server 22.04 LTS (Jammy). Terdeteksi: ${PRETTY_NAME:-tidak diketahui}."
+[[ -d /run/systemd/system ]] || fail 'Jalankan di Ubuntu dengan systemd aktif.'
 action="${1:-}"
 shift || true
 
@@ -61,6 +67,7 @@ service_state() {
 resolver_state_dir='/var/lib/unbound-web/root-state'
 resolver_state_file="$resolver_state_dir/resolver-state"
 resolver_backup_file="$resolver_state_dir/resolv.conf.backup"
+wizard_pending_file="$resolver_state_dir/wizard-pending"
 
 rollback_resolver() {
     [[ -r "$resolver_state_file" ]] || { info 'Tidak ada kondisi resolver sementara untuk dipulihkan.'; return 0; }
@@ -81,12 +88,14 @@ rollback_resolver() {
 
 prepare_resolver() {
     install -d -o root -g root -m 0700 "$resolver_state_dir"
-    local was_active=no was_enabled=no was_symlink=no link_target='' had_file=no
+    install -o root -g root -m 0600 /dev/null "$wizard_pending_file"
+    local was_active=no was_enabled=no was_symlink=no link_target='' had_file=no upstream=''
     if [[ -r "$resolver_state_file" ]]; then
         # Resume an interrupted wizard without replacing its original resolver backup.
         # shellcheck disable=SC1090
         . "$resolver_state_file"
         was_active="${resolver_was_active:-no}"
+        upstream="${resolver_upstream:-}"
     else
         systemctl is-active --quiet systemd-resolved && was_active=yes || true
         systemctl is-enabled --quiet systemd-resolved && was_enabled=yes || true
@@ -99,12 +108,19 @@ prepare_resolver() {
             cp -L -- /etc/resolv.conf "$resolver_backup_file"
             chmod 0600 "$resolver_backup_file"
         fi
+        upstream="$(awk '/^nameserver[[:space:]]+/ && $2 !~ /^127\./ && $2 != "::1" {print $2; exit}' \
+            /etc/resolv.conf 2>/dev/null || true)"
+        if [[ -z "$upstream" && "$was_active" == yes ]]; then
+            upstream="$(awk '/^nameserver[[:space:]]+/ && $2 !~ /^127\./ && $2 != "::1" {print $2; exit}' \
+                /run/systemd/resolve/resolv.conf 2>/dev/null || true)"
+        fi
         {
             printf 'resolver_was_active=%q\n' "$was_active"
             printf 'resolver_was_enabled=%q\n' "$was_enabled"
             printf 'resolver_was_symlink=%q\n' "$was_symlink"
             printf 'resolver_link_target=%q\n' "$link_target"
             printf 'resolver_had_file=%q\n' "$had_file"
+            printf 'resolver_upstream=%q\n' "$upstream"
         } > "$resolver_state_file"
         chmod 0600 "$resolver_state_file"
     fi
@@ -120,8 +136,9 @@ prepare_resolver() {
         fail 'Port 53 masih digunakan proses lain. Hentikan service tersebut sebelum melanjutkan.'
     fi
 
-    local upstream
-    upstream="$(awk '/^nameserver[[:space:]]+/ && $2 !~ /^127\./ && $2 != "::1" {print $2; exit}' "$resolver_backup_file" 2>/dev/null || true)"
+    if [[ -z "$upstream" ]]; then
+        upstream="$(awk '/^nameserver[[:space:]]+/ && $2 !~ /^127\./ && $2 != "::1" {print $2; exit}' "$resolver_backup_file" 2>/dev/null || true)"
+    fi
     [[ -n "$upstream" ]] || upstream='1.1.1.1'
     rm -f /etc/resolv.conf
     printf 'nameserver %s\noptions timeout:2 attempts:2\n' "$upstream" > /etc/resolv.conf
@@ -157,10 +174,13 @@ compile_source() {
     cores="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1')"
     [[ "$cores" =~ ^[1-9][0-9]*$ ]] || cores=1
     info "Build Unbound memakai $cores core CPU."
-    "$source_dir/configure" --with-libevent --with-pthreads --with-ssl --sysconfdir=/etc/unbound --prefix=/usr/local
-    info 'Konfigurasi build selesai.'
-    make -C "$source_dir" -j "$cores"
-    make -C "$source_dir" install
+    (
+        cd -- "$source_dir"
+        ./configure --with-libevent --with-pthreads --with-ssl --sysconfdir=/etc/unbound --prefix=/usr/local
+        info 'Konfigurasi build selesai.'
+        make -j "$cores"
+        make install
+    )
     ldconfig
     for tool in unbound unbound-control unbound-checkconf unbound-anchor unbound-control-setup; do
         [[ -x "/usr/local/sbin/$tool" ]] || fail "Binary hasil build tidak ditemukan: /usr/local/sbin/$tool"
@@ -168,8 +188,12 @@ compile_source() {
     info "Build selesai: $(/usr/local/sbin/unbound -V 2>&1 | head -n 1)"
 }
 
+valid_root_hints() {
+    grep -Eiq '^\.[[:space:]]+([0-9]+[[:space:]]+)?(IN[[:space:]]+)?NS[[:space:]]+[^[:space:]]+' "$1"
+}
+
 postinstall_unbound() {
-    local hints_tmp
+    local hints_tmp anchor_status=0 interfaces='127.0.0.1' acls='127.0.0.0/8'
     getent group unbound >/dev/null || groupadd --system unbound
     id unbound >/dev/null 2>&1 || useradd --system --gid unbound --home-dir /var/lib/unbound --no-create-home --shell /usr/sbin/nologin unbound
     install -d -o root -g unbound -m 0750 /etc/unbound /etc/unbound/unbound.conf.d
@@ -179,19 +203,28 @@ postinstall_unbound() {
         'https://www.internic.net/domain/named.root' --output "$hints_tmp"; then
         rm -f "$hints_tmp"; fail 'Unduhan root.hints gagal.'
     fi
-    grep -Eiq '[[:space:]]IN[[:space:]]+NS[[:space:]]' "$hints_tmp" || { rm -f "$hints_tmp"; fail 'File root.hints tidak valid.'; }
+    valid_root_hints "$hints_tmp" || { rm -f "$hints_tmp"; fail 'File root.hints tidak valid.'; }
     chown root:unbound "$hints_tmp"
     chmod 0640 "$hints_tmp"
     mv -f -- "$hints_tmp" /etc/unbound/root.hints
     [[ -x /usr/local/sbin/unbound-anchor ]] || fail 'Binary /usr/local/sbin/unbound-anchor tidak tersedia setelah build.'
-    /usr/local/sbin/unbound-anchor -a /var/lib/unbound/root.key
+    /usr/local/sbin/unbound-anchor -a /var/lib/unbound/root.key || anchor_status=$?
+    # Status 1 is expected when the built-in or certificate-updated trust anchor is used.
+    ((anchor_status <= 1)) && [[ -s /var/lib/unbound/root.key ]] ||
+        fail 'unbound-anchor tidak menghasilkan trust anchor DNSSEC.'
     chown unbound:unbound /var/lib/unbound/root.key
     chmod 0640 /var/lib/unbound/root.key
     /usr/local/sbin/unbound-control-setup -d /etc/unbound
     chown unbound:unbound /etc/unbound/unbound_server.key /etc/unbound/unbound_server.pem
     chmod 0640 /etc/unbound/unbound_server.key
     chmod 0644 /etc/unbound/unbound_server.pem
-    make_config '127.0.0.1,::1' '53' '127.0.0.0/8,::1/128' '2' '128m' '256m' 'yes' '60' '86400' '2' 'yes'
+    chown root:unbound /etc/unbound/unbound_control.key /etc/unbound/unbound_control.pem
+    chmod 0640 /etc/unbound/unbound_control.key /etc/unbound/unbound_control.pem
+    if [[ -n "$(ip -6 -o address show dev lo scope host)" ]]; then
+        interfaces+=',::1'
+        acls+=',::1/128'
+    fi
+    make_config "$interfaces" '53' "$acls" '2' '128m' '256m' 'yes' '60' '86400' '2' 'yes'
     cat > /etc/systemd/system/unbound.service <<'UNIT'
 [Unit]
 Description=Unbound DNS resolver
@@ -215,7 +248,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/etc/unbound /var/lib/unbound /run/unbound
+ReadWritePaths=/var/lib/unbound /run/unbound
 
 [Install]
 WantedBy=multi-user.target
@@ -224,29 +257,27 @@ UNIT
     info 'Root hints, DNSSEC trust anchor, TLS control keys, konfigurasi dasar, dan unit systemd siap.'
 }
 
-verify_unbound() {
-    local dns_test dnssec_test backup_upstream
+verify_unbound() (
+    local dns_test='' dnssec_test='' attempt
+    [[ -r "$resolver_state_file" ]] || fail 'Mulai pemeriksaan dari tahap persiapan wizard.'
     /usr/local/sbin/unbound-checkconf "$CONF_FILE"
+    trap 'if [[ -r "$resolver_state_file" ]]; then systemctl disable --now unbound >/dev/null 2>&1 || true; fi' EXIT
     systemctl enable --now unbound
-    systemctl restart unbound
-    systemctl is-active --quiet unbound || fail 'Service Unbound belum aktif.'
+    for attempt in {1..6}; do
+        dns_test="$(dig @127.0.0.1 nlnetlabs.nl +time=3 +tries=1 +short)" || dns_test=''
+        [[ -n "$dns_test" ]] && break
+        sleep 1
+    done
     /usr/local/sbin/unbound-control -c "$CONF_FILE" status
-    dns_test="$(dig @127.0.0.1 nlnetlabs.nl +time=3 +tries=1 +short)"
     [[ -n "$dns_test" ]] || fail 'Uji resolusi lokal gagal.'
-    dnssec_test="$(dig @127.0.0.1 nlnetlabs.nl +dnssec +time=3 +tries=1)"
+    dnssec_test="$(dig @127.0.0.1 nlnetlabs.nl +dnssec +time=5 +tries=2)"
     grep -Eq 'flags:.*[[:space:]]ad[[:space:];]' <<< "$dnssec_test" || fail 'Validasi DNSSEC tidak menghasilkan bit AD.'
-    backup_upstream="$(awk '/^nameserver[[:space:]]+/ && $2 !~ /^127\./ && $2 != "::1" {print $2; exit}' "$resolver_backup_file" 2>/dev/null || true)"
-    [[ -n "$backup_upstream" ]] || backup_upstream='1.1.1.1'
     printf 'nameserver 127.0.0.1\noptions timeout:2 attempts:2\n' > /etc/resolv.conf
     chmod 0644 /etc/resolv.conf
-    if ! getent ahosts nlnetlabs.nl >/dev/null; then
-        printf 'nameserver %s\noptions timeout:2 attempts:2\n' "$backup_upstream" > /etc/resolv.conf
-        chmod 0644 /etc/resolv.conf
-        fail 'Unbound menjawab query lokal, tetapi resolver sistem gagal. Konfigurasi resolver dikembalikan ke DNS upstream.'
-    fi
-    rm -f "$resolver_state_file"
+    getent ahosts nlnetlabs.nl >/dev/null || fail 'Unbound menjawab query lokal, tetapi resolver sistem gagal.'
+    rm -f "$resolver_state_file" "$wizard_pending_file"
     info 'Unbound, query DNS lokal, DNSSEC, dan resolver sistem berhasil diverifikasi.'
-}
+)
 
 make_config() {
     local interfaces_csv="$1" port="$2" acl_csv="$3" threads="$4" msg_cache="$5" rrset_cache="$6" prefetch="$7" min_ttl="$8" max_ttl="$9" slabs="${10}" harden="${11}" value
@@ -268,7 +299,8 @@ make_config() {
     [[ "$harden" == yes || "$harden" == no ]] || fail 'harden-dnssec-stripped hanya menerima yes atau no.'
 
     local temp_file backup_file
-    install -d -o root -g unbound -m 0750 /etc/unbound /etc/unbound/unbound.conf.d /var/lib/unbound
+    install -d -o root -g unbound -m 0750 /etc/unbound /etc/unbound/unbound.conf.d
+    install -d -o unbound -g unbound -m 0750 /var/lib/unbound
     temp_file="$(mktemp /etc/unbound/unbound.conf.XXXXXX)"
     {
         cat <<'CONF'
@@ -277,12 +309,19 @@ server:
     username: "unbound"
     chroot: ""
     directory: "/etc/unbound"
+    pidfile: "/run/unbound/unbound.pid"
 CONF
         for value in "${interfaces[@]}"; do printf '    interface: %s\n' "$value"; done
         printf '    port: %s\n' "$port"
         cat <<'CONF'
     do-ip4: yes
-    do-ip6: yes
+CONF
+        if [[ -n "$(ip -6 -o address show dev lo scope host)" ]]; then
+            printf '    do-ip6: yes\n'
+        else
+            printf '    do-ip6: no\n'
+        fi
+        cat <<'CONF'
     do-udp: yes
     do-tcp: yes
 CONF
@@ -404,7 +443,7 @@ update_root_hints() {
     if ! curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 'https://www.internic.net/domain/named.root' --output "$temp"; then
         rm -f "$temp" "$backup"; fail 'Unduhan root.hints gagal.'
     fi
-    grep -Eiq '[[:space:]]IN[[:space:]]+NS[[:space:]]' "$temp" || { rm -f "$temp" "$backup"; fail 'File root.hints tidak valid.'; }
+    valid_root_hints "$temp" || { rm -f "$temp" "$backup"; fail 'File root.hints tidak valid.'; }
     if ! cp -a /etc/unbound/root.hints "$backup"; then
         rm -f "$temp" "$backup"; fail 'Cadangan root.hints tidak dapat dibuat.'
     fi
@@ -427,7 +466,7 @@ configure_zabbix() {
     [[ "$hostname" =~ ^[A-Za-z0-9._-]{1,128}$ ]] || fail 'Hostname agent tidak valid.'
     if ! command -v zabbix_agent2 >/dev/null 2>&1 && ! command -v zabbix_agentd >/dev/null 2>&1; then
         fresh=yes
-        apt-get update
+        apt-get update --allow-releaseinfo-change-label
         if apt-cache show zabbix-agent2 >/dev/null 2>&1; then
             apt-get install -y zabbix-agent2
         else
@@ -510,7 +549,7 @@ set_unbound_logging() {
 
 case "$action" in
     service-status)
-        if [[ -x /usr/local/sbin/unbound ]]; then
+        if [[ -x /usr/local/sbin/unbound && ! -e "$wizard_pending_file" ]]; then
             unbound_state="$(service_state unbound /usr/local/sbin/unbound)"
             unbound_version="$(/usr/local/sbin/unbound -V 2>&1 | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n 1 || true)"
         else
@@ -530,9 +569,6 @@ case "$action" in
         /usr/local/sbin/unbound-control -c "$CONF_FILE" stats_noreset
         ;;
     wizard-step-1)
-        [[ -r /etc/os-release ]] || fail '/etc/os-release tidak tersedia.'
-        . /etc/os-release
-        [[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == 22.04 && "${VERSION_CODENAME:-}" == jammy ]] || fail "Wizard hanya mendukung Ubuntu Server 22.04 LTS (Jammy). Terdeteksi: ${PRETTY_NAME:-unknown}."
         if [[ -x /usr/local/sbin/unbound ]] && systemctl is-active --quiet unbound; then
             fail 'Unbound sudah aktif. Kelola konfigurasi dari Settings; wizard tidak perlu dijalankan ulang.'
         fi
