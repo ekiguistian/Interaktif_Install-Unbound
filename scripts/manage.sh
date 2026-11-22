@@ -20,6 +20,33 @@ fail() { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
 action="${1:-}"
 shift || true
 
+# Read literal arguments sent by the parent through the service's input.
+if [[ "${UNBOUND_WEB_SYSTEMD_ARGS:-}" == 1 && -z "${SUDO_USER:-}" ]]; then
+    mapfile -d '' -t service_args
+    set -- "${service_args[@]}"
+    exec </dev/null
+fi
+
+# sudo inherits the PHP-FPM service's read-only mounts. Keep that sandbox
+# and let systemd start the allowlisted system changes independently.
+case "$action" in
+    wizard-step-[1-5]|wizard-rollback|app-update)
+        (($# == 0)) || fail 'Aksi ini tidak menerima argumen.'
+        ;;
+esac
+case "$action" in
+    wizard-step-[1-5]|wizard-rollback|app-update|apply-config|unbound-logging-set|update-blocklists|update-root-hints|\
+    blocklist-schedule|zabbix-install|zabbix-config|zabbix-service|firewall-enable|firewall-disable|firewall-add|\
+    firewall-update|firewall-delete|cron-custom-save|cron-custom-delete)
+        if [[ "${SUDO_USER:-}" == www-data ]]; then
+            exec /usr/bin/systemd-run --system --no-ask-password --quiet --wait --pipe --collect \
+                --service-type=exec --setenv=SUDO_USER= --setenv=UNBOUND_WEB_SYSTEMD_ARGS=1 \
+                -- /usr/local/sbin/unbound-web-manage "$action" \
+                < <(if (($#)); then printf '%s\0' "$@"; fi)
+        fi
+        ;;
+esac
+
 valid_uint() { [[ "$1" =~ ^[1-9][0-9]{0,8}$ ]]; }
 valid_port() { valid_uint "$1" && ((10#$1 >= 1 && 10#$1 <= 65535)); }
 valid_ip() { php8.4 -r 'exit(filter_var($argv[1], FILTER_VALIDATE_IP) === false ? 1 : 0);' -- "$1" >/dev/null 2>&1; }
@@ -64,87 +91,122 @@ service_state() {
     fi
 }
 
+resolver_conf='/etc/resolv.conf'
 resolver_state_dir='/var/lib/unbound-web/root-state'
 resolver_state_file="$resolver_state_dir/resolver-state"
 resolver_backup_file="$resolver_state_dir/resolv.conf.backup"
+resolver_snapshot="$resolver_state_dir/resolv.conf.original"
 wizard_pending_file="$resolver_state_dir/wizard-pending"
 
-rollback_resolver() {
-    [[ -r "$resolver_state_file" ]] || { info 'Tidak ada kondisi resolver sementara untuk dipulihkan.'; return 0; }
-    # This file is root-owned and only contains shell-escaped values captured by this script.
+resolver_is_host_managed() {
+    systemd-detect-virt --quiet --container && return 0
+    findmnt -rn --mountpoint "$resolver_conf" >/dev/null 2>&1 && return 0
+    findmnt -rn --target "${resolver_conf%/*}" -o OPTIONS | grep -Eq '(^|,)ro(,|$)'
+}
+
+replace_resolver() {
+    local source="$1" temp
+    temp="$(mktemp "${resolver_conf%/*}/.unbound-resolv.XXXXXX")" || return 1
+    if ! cp -aT -- "$source" "$temp" || ! mv -fT -- "$temp" "$resolver_conf"; then
+        rm -f -- "$temp"
+        return 1
+    fi
+}
+
+rollback_resolver() (
+    [[ -r "$resolver_state_file" ]] || { info 'Tidak ada perubahan resolver yang perlu dipulihkan.'; return 0; }
+    local resolver_mode=legacy failed=0 restore_link=''
     # shellcheck disable=SC1090
     . "$resolver_state_file"
-    rm -f /etc/resolv.conf
-    if [[ "${resolver_was_symlink:-no}" == yes && -n "${resolver_link_target:-}" ]]; then
-        ln -s -- "$resolver_link_target" /etc/resolv.conf
-    elif [[ "${resolver_had_file:-no}" == yes && -s "$resolver_backup_file" ]]; then
-        install -o root -g root -m 0644 "$resolver_backup_file" /etc/resolv.conf
+    if [[ "$resolver_mode" == host ]]; then
+        info 'Resolver kelolaan host tetap digunakan.'
+        rm -f -- "$resolver_state_file"
+        return
     fi
-    if [[ "${resolver_was_enabled:-no}" == yes ]]; then systemctl enable systemd-resolved >/dev/null 2>&1 || true; fi
-    if [[ "${resolver_was_active:-no}" == yes ]]; then systemctl start systemd-resolved >/dev/null 2>&1 || true; fi
-    rm -f "$resolver_state_file"
-    info 'Resolver sistem dan status systemd-resolved dipulihkan.'
+
+    if resolver_is_host_managed; then
+        # Old wizard versions could stop resolved even when the file was read-only.
+        info 'File resolver kelolaan host dibiarkan utuh.'
+    elif [[ "$resolver_mode" == managed ]]; then
+        if [[ -L "$resolver_snapshot" ]]; then
+            if [[ ! -L "$resolver_conf" || "$(readlink -- "$resolver_conf")" != "$(readlink -- "$resolver_snapshot")" ]]; then
+                replace_resolver "$resolver_snapshot" || failed=1
+            fi
+        elif [[ -e "$resolver_snapshot" ]]; then
+            if [[ -L "$resolver_conf" ]] || ! cmp -s -- "$resolver_snapshot" "$resolver_conf"; then
+                replace_resolver "$resolver_snapshot" || failed=1
+            fi
+        elif [[ -e "$resolver_conf" || -L "$resolver_conf" ]]; then
+            rm -f -- "$resolver_conf" || failed=1
+        fi
+    elif [[ "${resolver_was_symlink:-no}" == yes ]]; then
+        if [[ ! -L "$resolver_conf" || "$(readlink -- "$resolver_conf")" != "$resolver_link_target" ]]; then
+            restore_link="$resolver_state_dir/resolv.conf.legacy-link"
+            if rm -f -- "$restore_link" && ln -s -- "$resolver_link_target" "$restore_link"; then
+                replace_resolver "$restore_link" || failed=1
+            else
+                failed=1
+            fi
+            rm -f -- "$restore_link" || failed=1
+        fi
+    elif [[ "${resolver_had_file:-no}" == yes ]]; then
+        if [[ -L "$resolver_conf" ]] || ! cmp -s -- "$resolver_backup_file" "$resolver_conf"; then
+            replace_resolver "$resolver_backup_file" || failed=1
+        fi
+    elif [[ -e "$resolver_conf" || -L "$resolver_conf" ]]; then
+        rm -f -- "$resolver_conf" || failed=1
+    fi
+
+    if [[ "${resolver_was_enabled:-no}" == yes ]] && ! systemctl is-enabled --quiet systemd-resolved; then
+        systemctl enable systemd-resolved || failed=1
+    fi
+    if [[ "${resolver_was_active:-no}" == yes ]] && ! systemctl is-active --quiet systemd-resolved; then
+        systemctl start systemd-resolved || failed=1
+    fi
+    ((failed == 0)) || fail 'Pemulihan DNS belum selesai. Cadangan resolver tetap tersimpan.'
+    rm -f -- "$resolver_state_file"
+    info 'Keadaan DNS sebelum wizard sudah dipulihkan.'
+)
+
+unbound_loopback_listener_conflicts() {
+    local ipv6="$1"
+    awk -v ipv6="$ipv6" '
+        {
+            address=$5
+            if (address ~ /^(127\.0\.0\.1(%[^:]*)?|0\.0\.0\.0|\*):53$/ ||
+                address ~ /^\[?::\]?:53$/ ||
+                (ipv6 == "yes" && address ~ /^\[?::1(%[^:]*)?\]?:53$/)) print
+        }'
 }
 
 prepare_resolver() {
     install -d -o root -g root -m 0700 "$resolver_state_dir"
-    install -o root -g root -m 0600 /dev/null "$wizard_pending_file"
-    local was_active=no was_enabled=no was_symlink=no link_target='' had_file=no upstream=''
-    if [[ -r "$resolver_state_file" ]]; then
-        # Resume an interrupted wizard without replacing its original resolver backup.
-        # shellcheck disable=SC1090
-        . "$resolver_state_file"
-        was_active="${resolver_was_active:-no}"
-        upstream="${resolver_upstream:-}"
+    if [[ -r "$resolver_state_file" ]]; then rollback_resolver; fi
+    local mode=managed was_active=no was_enabled=no listeners conflicts ipv6=no state_tmp
+    if resolver_is_host_managed; then mode=host; fi
+
+    if [[ -n "$(ip -6 -o address show dev lo scope host)" ]]; then ipv6=yes; fi
+    listeners="$(ss -H -lntu 'sport = :53')" || fail 'Gagal membaca listener port 53.'
+    conflicts="$(unbound_loopback_listener_conflicts "$ipv6" <<< "$listeners")"
+    if [[ -n "$conflicts" ]]; then
+        printf '%s\n' "$conflicts" >&2
+        fail 'Port 53 pada alamat loopback Unbound sudah digunakan.'
+    fi
+    getent ahosts nlnetlabs.nl >/dev/null || fail 'Resolver sistem saat ini gagal mengakses DNS Internet.'
+
+    rm -f -- "$resolver_snapshot"
+    if [[ "$mode" == managed ]]; then
+        if [[ -e "$resolver_conf" || -L "$resolver_conf" ]]; then cp -aT -- "$resolver_conf" "$resolver_snapshot"; fi
+        if systemctl is-active --quiet systemd-resolved; then was_active=yes; fi
+        if systemctl is-enabled --quiet systemd-resolved; then was_enabled=yes; fi
     else
-        systemctl is-active --quiet systemd-resolved && was_active=yes || true
-        systemctl is-enabled --quiet systemd-resolved && was_enabled=yes || true
-        if [[ -L /etc/resolv.conf ]]; then
-            was_symlink=yes
-            link_target="$(readlink /etc/resolv.conf)"
-        fi
-        if [[ -e /etc/resolv.conf ]]; then
-            had_file=yes
-            cp -L -- /etc/resolv.conf "$resolver_backup_file"
-            chmod 0600 "$resolver_backup_file"
-        fi
-        upstream="$(awk '/^nameserver[[:space:]]+/ && $2 !~ /^127\./ && $2 != "::1" {print $2; exit}' \
-            /etc/resolv.conf 2>/dev/null || true)"
-        if [[ -z "$upstream" && "$was_active" == yes ]]; then
-            upstream="$(awk '/^nameserver[[:space:]]+/ && $2 !~ /^127\./ && $2 != "::1" {print $2; exit}' \
-                /run/systemd/resolve/resolv.conf 2>/dev/null || true)"
-        fi
-        {
-            printf 'resolver_was_active=%q\n' "$was_active"
-            printf 'resolver_was_enabled=%q\n' "$was_enabled"
-            printf 'resolver_was_symlink=%q\n' "$was_symlink"
-            printf 'resolver_link_target=%q\n' "$link_target"
-            printf 'resolver_had_file=%q\n' "$had_file"
-            printf 'resolver_upstream=%q\n' "$upstream"
-        } > "$resolver_state_file"
-        chmod 0600 "$resolver_state_file"
+        info 'Resolver dikelola host atau bersifat read-only. Wizard akan mempertahankan pengaturan DNS tersebut.'
     fi
-
-    printf 'Listener port 53 sebelum perubahan:\n'
-    ss -lntup 2>/dev/null | awk 'NR==1 || /:53([[:space:]]|$)/' || true
-    if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
-        info 'Menghentikan systemd-resolved agar Unbound dapat memakai port 53.'
-        systemctl stop systemd-resolved
-        systemctl disable systemd-resolved >/dev/null 2>&1 || true
-    fi
-    if ss -H -lntu 2>/dev/null | grep -Eq '(^|[[:space:]])[^[:space:]]*:53([[:space:]]|$)'; then
-        fail 'Port 53 masih digunakan proses lain. Hentikan service tersebut sebelum melanjutkan.'
-    fi
-
-    if [[ -z "$upstream" ]]; then
-        upstream="$(awk '/^nameserver[[:space:]]+/ && $2 !~ /^127\./ && $2 != "::1" {print $2; exit}' "$resolver_backup_file" 2>/dev/null || true)"
-    fi
-    [[ -n "$upstream" ]] || upstream='1.1.1.1'
-    rm -f /etc/resolv.conf
-    printf 'nameserver %s\noptions timeout:2 attempts:2\n' "$upstream" > /etc/resolv.conf
-    chmod 0644 /etc/resolv.conf
-    getent ahosts nlnetlabs.nl >/dev/null || fail 'Resolusi internet dengan DNS upstream gagal. Resolver sebelumnya akan dipulihkan.'
-    info "Resolver sementara memakai $upstream dan akses DNS internet berhasil."
+    state_tmp="$(mktemp "$resolver_state_dir/.resolver-state.XXXXXX")"
+    printf 'resolver_mode=%q\nresolver_was_active=%q\nresolver_was_enabled=%q\n' "$mode" "$was_active" "$was_enabled" > "$state_tmp"
+    mv -fT -- "$state_tmp" "$resolver_state_file"
+    install -o root -g root -m 0600 /dev/null "$wizard_pending_file"
+    info 'Port loopback tersedia. DNS sistem dipertahankan selama instalasi.'
 }
 
 download_source() {
@@ -253,15 +315,23 @@ ReadWritePaths=/var/lib/unbound /run/unbound
 [Install]
 WantedBy=multi-user.target
 UNIT
+    if systemd-detect-virt --quiet --container; then
+        # The container already provides filesystem isolation. Some LXC policies deny nested mounts.
+        sed -i -e '/^ProtectSystem=/d' -e '/^ProtectHome=/d' -e '/^PrivateTmp=/d' -e '/^ReadWritePaths=/d' \
+            /etc/systemd/system/unbound.service
+    fi
     systemctl daemon-reload
     info 'Root hints, DNSSEC trust anchor, TLS control keys, konfigurasi dasar, dan unit systemd siap.'
 }
 
 verify_unbound() (
-    local dns_test='' dnssec_test='' attempt
+    local dns_test='' dnssec_test='' attempt resolver_mode=legacy new_resolver=''
     [[ -r "$resolver_state_file" ]] || fail 'Mulai pemeriksaan dari tahap persiapan wizard.'
+    # shellcheck disable=SC1090
+    . "$resolver_state_file"
     /usr/local/sbin/unbound-checkconf "$CONF_FILE"
-    trap 'if [[ -r "$resolver_state_file" ]]; then systemctl disable --now unbound >/dev/null 2>&1 || true; fi' EXIT
+    trap 'if [[ -n "$new_resolver" ]]; then rm -f -- "$new_resolver"; fi
+        if [[ -r "$resolver_state_file" ]]; then systemctl disable --now unbound >/dev/null 2>&1 || true; fi' EXIT
     systemctl enable --now unbound
     for attempt in {1..6}; do
         dns_test="$(dig @127.0.0.1 nlnetlabs.nl +time=3 +tries=1 +short)" || dns_test=''
@@ -272,8 +342,20 @@ verify_unbound() (
     [[ -n "$dns_test" ]] || fail 'Uji resolusi lokal gagal.'
     dnssec_test="$(dig @127.0.0.1 nlnetlabs.nl +dnssec +time=5 +tries=2)"
     grep -Eq 'flags:.*[[:space:]]ad[[:space:];]' <<< "$dnssec_test" || fail 'Validasi DNSSEC tidak menghasilkan bit AD.'
-    printf 'nameserver 127.0.0.1\noptions timeout:2 attempts:2\n' > /etc/resolv.conf
-    chmod 0644 /etc/resolv.conf
+    if [[ "$resolver_mode" == host ]] || resolver_is_host_managed; then
+        info 'Unbound sudah menjawab di 127.0.0.1:53. DNS sistem tetap dikelola host.'
+    else
+        new_resolver="$(mktemp "$resolver_state_dir/.unbound-resolv.XXXXXX")"
+        printf 'nameserver 127.0.0.1\noptions timeout:2 attempts:2\n' > "$new_resolver"
+        chmod 0644 "$new_resolver"
+        if replace_resolver "$new_resolver"; then
+            if systemctl is-active --quiet systemd-resolved; then systemctl stop systemd-resolved; fi
+            if systemctl is-enabled --quiet systemd-resolved; then systemctl disable systemd-resolved; fi
+            info 'DNS sistem diarahkan ke Unbound di 127.0.0.1.'
+        else
+            info 'File resolver tidak bisa diganti. Unbound tetap tersedia di 127.0.0.1:53.'
+        fi
+    fi
     getent ahosts nlnetlabs.nl >/dev/null || fail 'Unbound menjawab query lokal, tetapi resolver sistem gagal.'
     rm -f "$resolver_state_file" "$wizard_pending_file"
     info 'Unbound, query DNS lokal, DNSSEC, dan resolver sistem berhasil diverifikasi.'
@@ -519,6 +601,50 @@ lock_unbound_config() {
     flock -n 9 || fail 'Konfigurasi Unbound sedang diubah. Coba lagi.'
 }
 
+update_web_manager() {
+    local update_dir='/var/lib/unbound-web-updates'
+    local remote='https://github.com/ekiguistian/Interaktif_Install-Unbound.git'
+    local checkout="$update_dir/checkout" latest installed=''
+    local -a git_cmd=(/usr/bin/git -c core.hooksPath=/dev/null -c protocol.allow=never
+        -c protocol.https.allow=always -c fetch.recurseSubmodules=false -c http.followRedirects=false)
+
+    umask 077
+    [[ ! -L "$update_dir" && ! -L "$checkout" ]] || fail 'Lokasi checkout pembaruan tidak valid.'
+    install -d -o root -g root -m 0700 "$update_dir"
+    exec 8>"$update_dir/update.lock"
+    flock -n 8 || fail 'Pembaruan Web Manager sedang berjalan.'
+    export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
+
+    if [[ ! -d "$checkout/.git" ]]; then
+        info 'Membuat checkout khusus pembaruan dari GitHub.'
+        "${git_cmd[@]}" clone --branch main --single-branch --no-tags "$remote" "$checkout"
+    fi
+    [[ "$("${git_cmd[@]}" -C "$checkout" branch --show-current)" == main ]] ||
+        fail 'Checkout pembaruan harus berada di branch main.'
+    [[ -z "$("${git_cmd[@]}" -C "$checkout" status --porcelain)" ]] ||
+        fail 'Checkout pembaruan memiliki perubahan lokal.'
+    info 'Memeriksa pembaruan branch main.'
+    "${git_cmd[@]}" -C "$checkout" pull --ff-only --no-rebase --no-tags "$remote" main
+    latest="$("${git_cmd[@]}" -C "$checkout" rev-parse --verify HEAD)"
+
+    if [[ -r "$APP_DIR/revision" ]]; then read -r installed < "$APP_DIR/revision"; fi
+    if [[ "$latest" == "$installed" ]]; then
+        info "Web Manager sudah terbaru (${latest:0:12})."
+        return
+    fi
+    if [[ -n "$installed" ]]; then
+        [[ "$installed" =~ ^[0-9a-f]{40}$ ]] &&
+            "${git_cmd[@]}" -C "$checkout" merge-base --is-ancestor "$installed" "$latest" ||
+            fail 'Versi terpasang berada di luar riwayat main. Pembaruan dihentikan.'
+    fi
+
+    info "Menerapkan commit ${latest:0:12} dan memeriksa Web Manager."
+    if ! /usr/bin/bash "$checkout/install.sh" --web-update > "$update_dir/update.log" 2>&1; then
+        fail "Pembaruan gagal. Detail tersimpan di $update_dir/update.log dan hanya dapat dibaca root."
+    fi
+    info "Web Manager diperbarui ke ${latest:0:12}. Muat ulang halaman."
+}
+
 set_unbound_logging() {
     local queries="$1" replies="$2" temp backup='' tag=no
     local dir='/etc/unbound/unbound.conf.d' check='/usr/local/sbin/unbound-checkconf'
@@ -594,6 +720,9 @@ case "$action" in
         ;;
     wizard-rollback)
         rollback_resolver
+        ;;
+    app-update)
+        update_web_manager
         ;;
     apply-config)
         (($# == 11)) || fail 'Parameter konfigurasi tidak lengkap.'

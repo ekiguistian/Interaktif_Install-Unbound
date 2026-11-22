@@ -13,7 +13,8 @@
 - Jangan membuka recursion DNS ke `0.0.0.0/0` atau `::/0` pada server yang dapat diakses dari Internet.
 - Periksa alamat interface, sumber SSH, port web, dan alamat Zabbix sebelum mengaktifkan UFW. Installer membiarkan filter UFW mengikuti status yang sudah tersimpan.
 - Pakai sumber blocklist dan whitelist HTTPS yang dipercaya. Web Manager memeriksa IP publik sumber blocklist dan mengunduhnya tanpa mengikuti pengalihan.
-- Wizard mengubah resolver host sementara. Jika wizard gagal, pengaturan resolver dan status `systemd-resolved` dipulihkan.
+- Wizard mempertahankan DNS sistem selama instalasi. Setelah uji DNSSEC, VM dapat beralih ke Unbound. Resolver LXC atau file yang dikelola host tetap dipertahankan. Jika perubahan DNS VM gagal, wizard memulihkan pengaturan sebelumnya.
+- Pembaruan dari Settings memerlukan login admin dan memakai checkout milik root dari branch `main` repo resmi.
 - Cadangkan konfigurasi sebelum menjalankan script CLI. Uninstaller menghapus data dan konfigurasi Unbound, mereset aturan UFW, lalu menonaktifkan firewall.
 
 ## Log dan pengujian

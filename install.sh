@@ -9,6 +9,7 @@ ENV_FILE="$ENV_DIR/.env"
 WEB_USER='www-data'
 MYSQL_DB='unbound_web'
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+WEB_UPDATE=no
 
 red=$'\033[31m'; green=$'\033[32m'; blue=$'\033[34m'; reset=$'\033[0m'
 if [[ ! -t 1 || "${TERM:-}" == dumb || -n "${NO_COLOR:-}" ]]; then red=''; green=''; blue=''; reset=''; fi
@@ -18,6 +19,12 @@ die() { printf '%s[ERROR]%s %s\n' "$red" "$reset" "$*" >&2; exit 1; }
 on_error() { local code=$? line=${BASH_LINENO[0]:-unknown}; die "Proses gagal pada baris $line (exit $code). Periksa pesan di atas."; }
 trap on_error ERR
 
+case "$#:${1:-}" in
+    0:) ;;
+    1:--web-update) WEB_UPDATE=yes ;;
+    *) die 'Penggunaan: bash ./install.sh' ;;
+esac
+
 if [[ -t 1 && "${TERM:-}" != dumb ]] && command -v clear >/dev/null 2>&1; then clear || true; fi
 printf '%s============================================================%s\n' "$blue" "$reset"
 printf '%s%s%s\n' "$blue" "$APP_NAME" "$reset"
@@ -25,6 +32,10 @@ printf '%s============================================================%s\n' "$bl
 
 [[ $EUID -eq 0 ]] || die 'Jalankan sebagai root: sudo bash ./install.sh'
 [[ -f "$SCRIPT_DIR/public/index.php" && -f "$SCRIPT_DIR/app/bootstrap.php" ]] || die 'Jalankan installer dari folder repository lengkap.'
+if [[ "$WEB_UPDATE" == yes ]]; then
+    [[ "$SCRIPT_DIR" == /var/lib/unbound-web-updates/checkout && -f "$ENV_FILE" && -d "$APP_DIR/app" ]] ||
+        die 'Checkout pembaruan atau instalasi Web Manager tidak tersedia.'
+fi
 [[ -r /etc/os-release ]] || die '/etc/os-release tidak ditemukan.'
 # shellcheck disable=SC1091
 . /etc/os-release
@@ -112,47 +123,76 @@ prepare_legacy_mysql_source() {
     )
 }
 
-prepare_legacy_mysql_source
+use_ufw=no
+if [[ "$WEB_UPDATE" == no ]]; then
+    prepare_legacy_mysql_source
 
-step 'Memperbarui indeks APT dan memasang alat dasar.'
-export DEBIAN_FRONTEND=noninteractive
-apt-get update --allow-releaseinfo-change-label
-apt-get install -y --no-install-recommends ca-certificates curl iproute2 openssl software-properties-common
+    step 'Memperbarui indeks APT dan memasang alat dasar.'
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update --allow-releaseinfo-change-label
+    apt-get install -y --no-install-recommends ca-certificates curl iproute2 openssl software-properties-common
 
-if ! apt-cache show dnsperf >/dev/null 2>&1; then
-    add-apt-repository --yes universe
-    apt-get update
-fi
-apt-cache show dnsperf >/dev/null 2>&1 || die 'Paket dnsperf tidak tersedia pada repository aktif.'
+    if ! apt-cache show dnsperf >/dev/null 2>&1; then
+        add-apt-repository --yes universe
+        apt-get update
+    fi
+    apt-cache show dnsperf >/dev/null 2>&1 || die 'Paket dnsperf tidak tersedia pada repository aktif.'
 
-if ! grep -qsE '^[[:space:]]*(deb[[:space:]]|URIs:).*https://packages\.sury\.org/php/?([[:space:]]|$)' \
-    /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; then
-    step 'Menambahkan repository PHP Surý untuk Ubuntu 22.04.'
-    keyring_dir="$(mktemp -d)"
-    if ! curl -fsSL --proto '=https' --proto-redir '=https' --max-time 60 \
-        https://packages.sury.org/debsuryorg-archive-keyring.deb -o "$keyring_dir/debsuryorg-archive-keyring.deb" ||
-        ! dpkg -i "$keyring_dir/debsuryorg-archive-keyring.deb"; then
+    if ! grep -qsE '^[[:space:]]*(deb[[:space:]]|URIs:).*https://packages\.sury\.org/php/?([[:space:]]|$)' \
+        /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; then
+        step 'Menambahkan repository PHP Surý untuk Ubuntu 22.04.'
+        keyring_dir="$(mktemp -d)"
+        if ! curl -fsSL --proto '=https' --proto-redir '=https' --max-time 60 \
+            https://packages.sury.org/debsuryorg-archive-keyring.deb -o "$keyring_dir/debsuryorg-archive-keyring.deb" ||
+            ! dpkg -i "$keyring_dir/debsuryorg-archive-keyring.deb"; then
+            rm -f -- "$keyring_dir/debsuryorg-archive-keyring.deb"
+            rmdir -- "$keyring_dir"
+            die 'Keyring repository PHP gagal dipasang.'
+        fi
         rm -f -- "$keyring_dir/debsuryorg-archive-keyring.deb"
         rmdir -- "$keyring_dir"
-        die 'Keyring repository PHP gagal dipasang.'
+        printf 'deb [signed-by=/usr/share/keyrings/debsuryorg-archive-keyring.gpg] https://packages.sury.org/php/ %s main\n' \
+            "$OS_CODENAME" > /etc/apt/sources.list.d/unbound-web-php.list
+        apt-get update
     fi
-    rm -f -- "$keyring_dir/debsuryorg-archive-keyring.deb"
-    rmdir -- "$keyring_dir"
-    printf 'deb [signed-by=/usr/share/keyrings/debsuryorg-archive-keyring.gpg] https://packages.sury.org/php/ %s main\n' \
-        "$OS_CODENAME" > /etc/apt/sources.list.d/unbound-web-php.list
-    apt-get update
-fi
-apt-cache show php8.4-fpm >/dev/null 2>&1 || die 'Paket PHP 8.4 tidak tersedia dari repository yang aktif.'
+    apt-cache show php8.4-fpm >/dev/null 2>&1 || die 'Paket PHP 8.4 tidak tersedia dari repository yang aktif.'
 
-step 'Memasang PHP 8.4, Nginx, MySQL Server, dnsperf, Git, dan build dependencies Unbound.'
-packages=(php8.4-fpm php8.4-mysql php8.4-cli php8.4-curl php8.4-mbstring php8.4-xml dnsperf dnsutils nginx ufw sudo cron git)
-packages+=(logrotate)
-packages+=(build-essential pkg-config libssl-dev libexpat1-dev libevent-dev bison flex wget)
-[[ "$MYSQL_SERVER_PRESENT" == yes ]] || packages+=(mysql-server)
-apt-get install -y --no-install-recommends "${packages[@]}"
+    step 'Memasang PHP 8.4, Nginx, MySQL Server, dnsperf, Git, dan build dependencies Unbound.'
+    packages=(php8.4-fpm php8.4-mysql php8.4-cli php8.4-curl php8.4-mbstring php8.4-xml dnsperf dnsutils nginx ufw sudo cron git)
+    packages+=(logrotate)
+    packages+=(build-essential pkg-config libssl-dev libexpat1-dev libevent-dev bison flex wget)
+    [[ "$MYSQL_SERVER_PRESENT" == yes ]] || packages+=(mysql-server)
+    apt-get install -y --no-install-recommends "${packages[@]}"
+    if systemd-detect-virt --quiet --container && ! iptables -t filter -S >/dev/null 2>&1; then
+        info 'Container tidak memiliki akses netfilter. Gunakan firewall Proxmox atau host untuk port 8000.'
+    else
+        ufw allow 8000/tcp comment 'Unbound Web Manager'
+        use_ufw=yes
+    fi
+fi
 php8.4 -r 'exit(PHP_VERSION_ID >= 80400 && extension_loaded("pdo_mysql") && extension_loaded("curl") && extension_loaded("mbstring") && extension_loaded("xml") ? 0 : 1);' || die 'PHP 8.4 atau extension wajib belum siap.'
 command -v dnsperf >/dev/null 2>&1 || die 'dnsperf belum tersedia setelah pemasangan.'
-ufw allow 8000/tcp comment 'Unbound Web Manager'
+
+if [[ "$WEB_UPDATE" == yes ]]; then
+    update_backup="$(mktemp -d /opt/.unbound-web-backup.XXXXXX)"
+    trap 'rm -rf -- "$update_backup"' EXIT
+    cp -aT -- "$APP_DIR" "$update_backup/app"
+    cp -a -- /usr/local/sbin/unbound-web-manage "$update_backup/manage"
+    rollback_web_update() {
+        local status=$?
+        if ((status != 0)); then
+            if ! mv -T -- "$APP_DIR" "$update_backup/failed" ||
+                ! mv -T -- "$update_backup/app" "$APP_DIR" ||
+                ! install -o root -g root -m 0750 "$update_backup/manage" /usr/local/sbin/unbound-web-manage; then
+                printf '[ERROR] Cadangan pembaruan tersimpan di %s\n' "$update_backup" >&2
+                return "$status"
+            fi
+        fi
+        rm -rf -- "$update_backup"
+        return "$status"
+    }
+    trap rollback_web_update EXIT
+fi
 
 step 'Menyiapkan direktori aplikasi dan database.'
 install -d -o root -g root -m 0755 "$APP_DIR" "$APP_DIR/app" "$APP_DIR/public" "$APP_DIR/bin" "$APP_DIR/database"
@@ -271,26 +311,27 @@ if [[ -r "$SCRIPT_DIR/src/dnsperf-domains.txt" ]]; then
     rm -f -- "$seed_sql"
 fi
 
-step 'Mengatur sudo terbatas, cron worker, dan PHP-FPM.'
-sudoers_tmp="$(mktemp /tmp/unbound-web-sudoers.XXXXXX)"
-cat > "$sudoers_tmp" <<'SUDOERS'
+if [[ "$WEB_UPDATE" == no ]]; then
+    step 'Mengatur sudo terbatas, cron worker, dan PHP-FPM.'
+    sudoers_tmp="$(mktemp /tmp/unbound-web-sudoers.XXXXXX)"
+    cat > "$sudoers_tmp" <<'SUDOERS'
 Defaults:www-data !requiretty
 www-data ALL=(root) NOPASSWD: /usr/local/sbin/unbound-web-manage *
 SUDOERS
-visudo -cf "$sudoers_tmp"
-install -o root -g root -m 0440 "$sudoers_tmp" /etc/sudoers.d/unbound-web
-rm -f -- "$sudoers_tmp"
+    visudo -cf "$sudoers_tmp"
+    install -o root -g root -m 0440 "$sudoers_tmp" /etc/sudoers.d/unbound-web
+    rm -f -- "$sudoers_tmp"
 
-cron_tmp="$(mktemp /tmp/unbound-web-cron.XXXXXX)"
-cat > "$cron_tmp" <<'CRON'
+    cron_tmp="$(mktemp /tmp/unbound-web-cron.XXXXXX)"
+    cat > "$cron_tmp" <<'CRON'
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 * * * * * www-data /usr/bin/php8.4 /opt/unbound-web/bin/worker.php >>/var/log/unbound-web/worker.log 2>&1
 CRON
-if [[ ! -e /etc/cron.d/unbound-web ]]; then install -o root -g root -m 0644 "$cron_tmp" /etc/cron.d/unbound-web; fi
-rm -f -- "$cron_tmp"
+    if [[ ! -e /etc/cron.d/unbound-web ]]; then install -o root -g root -m 0644 "$cron_tmp" /etc/cron.d/unbound-web; fi
+    rm -f -- "$cron_tmp"
 
-cat > /etc/logrotate.d/unbound-web <<'LOGROTATE'
+    cat > /etc/logrotate.d/unbound-web <<'LOGROTATE'
 /var/log/unbound-web/*.log {
     daily
     rotate 7
@@ -300,12 +341,12 @@ cat > /etc/logrotate.d/unbound-web <<'LOGROTATE'
     copytruncate
 }
 LOGROTATE
-chmod 0644 /etc/logrotate.d/unbound-web
+    chmod 0644 /etc/logrotate.d/unbound-web
 
-step 'Membuat virtual host Nginx di port 8000.'
-nginx_site='/etc/nginx/sites-available/unbound-web'
-if [[ -e "$nginx_site" ]]; then cp -a "$nginx_site" "$nginx_site.bak.$(date +%Y%m%d%H%M%S)"; fi
-cat > "$nginx_site" <<'NGINX'
+    step 'Membuat virtual host Nginx di port 8000.'
+    nginx_site='/etc/nginx/sites-available/unbound-web'
+    if [[ -e "$nginx_site" ]]; then cp -a "$nginx_site" "$nginx_site.bak.$(date +%Y%m%d%H%M%S)"; fi
+    cat > "$nginx_site" <<'NGINX'
 server {
     listen 8000 default_server;
     listen [::]:8000 default_server;
@@ -339,14 +380,18 @@ server {
     }
 }
 NGINX
-ln -sfn "$nginx_site" /etc/nginx/sites-enabled/unbound-web
-nginx -t
-php-fpm8.4 -t
-systemctl enable --now php8.4-fpm nginx cron ufw logrotate.timer
-systemctl reload nginx
+    ln -sfn "$nginx_site" /etc/nginx/sites-enabled/unbound-web
+    nginx -t
+    php-fpm8.4 -t
+    systemctl enable --now php8.4-fpm nginx cron logrotate.timer
+    if [[ "$use_ufw" == yes ]]; then systemctl enable --now ufw; fi
+    systemctl reload nginx
+fi
 
 step 'Menjalankan pemeriksaan akhir.'
-for unit in mysql php8.4-fpm nginx cron ufw logrotate.timer; do
+units=(mysql php8.4-fpm nginx cron logrotate.timer)
+if [[ "$use_ufw" == yes ]]; then units+=(ufw); fi
+for unit in "${units[@]}"; do
     systemctl is-enabled --quiet "$unit" && systemctl is-active --quiet "$unit" ||
         die "Layanan $unit belum aktif atau belum diaktifkan saat boot."
 done
@@ -362,4 +407,10 @@ if ! curl -fsS --noproxy '*' --max-time 15 "$check_url/api/metrics" | php8.4 -r 
     die 'Aplikasi tidak dapat membaca database melalui API metrik.'
 fi
 
-printf '\nURL      : http://%s:8000\nUsername : %s\nPassword : %s\n' "$SERVER_IP" "$ADMIN_USER" "$ADMIN_PASSWORD"
+if [[ -d "$SCRIPT_DIR/.git" || -f "$SCRIPT_DIR/.git" ]]; then
+    revision="$(git -c safe.directory="$SCRIPT_DIR" -C "$SCRIPT_DIR" rev-parse --verify HEAD)"
+    printf '%s\n' "$revision" > "$APP_DIR/revision"
+fi
+if [[ "$WEB_UPDATE" == no ]]; then
+    printf '\nURL      : http://%s:8000\nUsername : %s\nPassword : %s\n' "$SERVER_IP" "$ADMIN_USER" "$ADMIN_PASSWORD"
+fi

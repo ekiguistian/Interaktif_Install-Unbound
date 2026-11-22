@@ -33,6 +33,7 @@
   document.querySelectorAll('form[data-stream]').forEach((form) => {
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
+      if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) return;
       const button = form.querySelector('[type="submit"]');
       const output = document.querySelector(form.dataset.output || '[data-stream-output]');
       let wizardCompleted = false;

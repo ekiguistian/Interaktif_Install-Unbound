@@ -4,7 +4,7 @@ Pasang dan kelola resolver DNS Unbound dari browser. Web Manager menyediakan wiz
 
 ## Persyaratan
 
-- Ubuntu Server 22.04 LTS dengan systemd, arsitektur amd64 atau arm64.
+- Ubuntu Server 22.04 LTS di VM, server fisik, atau LXC Proxmox. Arsitektur amd64 atau arm64 dengan systemd aktif.
 - Minimal 1 vCPU, RAM 2 GB, dan ruang kosong 4 GB pada filesystem yang memuat `/var`.
 - Akun dengan akses sudo atau root, koneksi Internet, dan port TCP 8000 yang tersedia.
 - MySQL berjalan di server yang sama. Installer memasangnya jika belum tersedia.
@@ -15,7 +15,7 @@ Installer memasang Nginx, PHP 8.4 dan ekstensi yang dipakai aplikasi, MySQL, UFW
 
 ### 1. Pasang Ubuntu Server 22.04 LTS
 
-Unduh image Jammy sesuai arsitektur server, lalu boot dari ISO di VM atau server fisik. Saat instalasi, buat akun admin, siapkan jaringan, dan pilih **Install OpenSSH server** jika akan masuk lewat SSH. Setelah reboot, masuk ke server dan catat alamat IP yang dapat dijangkau komputer admin. [ISO amd64](https://releases.ubuntu.com/jammy/) · [ISO arm64](https://cdimage.ubuntu.com/ubuntu/releases/jammy/release/) · [Panduan instalasi Ubuntu Server](https://ubuntu.com/server/docs/tutorial/basic-installation/)
+Untuk VM atau server fisik, boot dari ISO Jammy dan siapkan akun serta jaringan. Untuk LXC Proxmox, buat container dari template Ubuntu 22.04, lalu atur IP, gateway, dan DNS di Proxmox. Masuk ke Ubuntu dan catat IP yang dapat dijangkau komputer admin. [ISO amd64](https://releases.ubuntu.com/jammy/) · [ISO arm64](https://cdimage.ubuntu.com/ubuntu/releases/jammy/release/) · [Panduan instalasi Ubuntu Server](https://ubuntu.com/server/docs/tutorial/basic-installation/)
 
 ```bash
 . /etc/os-release
@@ -60,7 +60,7 @@ Gunakan URL yang dicetak installer. Simpan username dan password admin dengan am
 ### 4. Pasang Unbound dari browser
 
 1. Buka URL Web Manager, pilih **Install Wizard**, lalu login sebagai admin.
-2. Jalankan setiap tahap secara berurutan. Wizard menyiapkan port 53 dan DNS sementara, mengunduh source, mengompilasi Unbound, memasang root hints dan DNSSEC, lalu menguji resolver.
+2. Jalankan setiap tahap secara berurutan. Wizard memeriksa port 53 dan DNS Internet, mengunduh source, mengompilasi Unbound, memasang root hints dan DNSSEC, lalu menguji resolver.
 3. Setelah tahap terakhir berhasil, buka kembali **Live Monitor**. Status Unbound akan tampil aktif dan menu berubah menjadi **Setting**. Worker mencatat data setiap menit.
 
 ### 5. Periksa DNS dari server
@@ -73,10 +73,12 @@ dig @127.0.0.1 nlnetlabs.nl A +dnssec
 
 Service harus berstatus `active`, API harus mengembalikan `"ok":true`, dan hasil `dig` harus menampilkan `NOERROR` serta flag `ad`.
 
+Pada VM dengan file resolver yang bisa diganti, wizard mengarahkan DNS sistem ke Unbound setelah pengujian. Pada LXC atau resolver yang dikelola host, wizard mempertahankan `/etc/resolv.conf`. Unbound tetap dapat diuji langsung di `127.0.0.1:53`. Jika ingin menggunakan Unbound untuk klien atau container lain, gunakan IP LAN setelah langkah berikutnya.
+
 ### 6. Hubungkan klien LAN dan monitoring bila diperlukan
 
 1. Untuk melayani klien LAN, buka **Setting → Unbound**. Tambahkan IP LAN server, misalnya `192.168.1.2`, dan subnet klien, misalnya `192.168.1.0/24`, sambil mempertahankan interface dan ACL loopback. Validasi dan terapkan konfigurasi.
-2. Jika memakai UFW, buka **Firewall**. Pastikan akses SSH dan TCP 8000 dari jaringan admin tersedia. Tambahkan **Allow IN** untuk TCP dan UDP port 53 dari subnet klien, lalu aktifkan UFW bila diperlukan.
+2. Jika memakai UFW, buka **Firewall**. Pastikan akses SSH dan TCP 8000 dari jaringan admin tersedia. Tambahkan **Allow IN** untuk TCP dan UDP port 53 dari subnet klien. Jika LXC tidak punya akses netfilter, buat aturan tersebut di firewall Proxmox atau host.
 3. Dari klien yang diizinkan, jalankan `dig @192.168.1.2 nlnetlabs.nl` dengan IP server yang sebenarnya. Jika berhasil, pakai IP itu sebagai DNS klien atau bagikan melalui DHCP.
 4. Untuk monitoring Zabbix, buka menu **Zabbix Agent**, isi alamat server dan hostname, lalu pasang dan periksa status agent.
 
@@ -96,7 +98,7 @@ flowchart TD
     J --> K["Siapkan resolver, kompilasi Unbound, pasang root hints dan DNSSEC"]
     K --> L{"Uji DNS dan DNSSEC lulus?"}
     L -->|Tidak| M["Pulihkan resolver sebelumnya"]
-    L -->|Ya| N["Gunakan Unbound sebagai resolver lokal"]
+    L -->|Ya| N["VM dapat beralih ke Unbound dan LXC mempertahankan DNS host"]
     N --> O["Periksa service dan DNS, lalu buka Setting"]
     I -->|Sudah| O
     O --> P["Unbound, Zabbix Agent, dan Firewall"]
@@ -115,12 +117,25 @@ flowchart TD
 | **Cron dan uji DNS** | Jadwalkan pembaruan root hints atau blocklist. Kelola domain uji dan jalankan dnsperf ke IP lokal atau privat hingga 300 detik dengan pilihan client, thread, dan QPS. |
 | **Zabbix Agent** | Pasang agent, atur `Server`, `ServerActive`, dan `Hostname`, lalu gunakan Enable, Disable, atau Restart. |
 | **Firewall** | Lihat status UFW, aktifkan atau nonaktifkan firewall, serta tambah, ubah, dan hapus aturan Allow atau Deny untuk arah IN dan OUT. |
+| **Check for Update** | Periksa dan pasang commit baru dari branch `main` melalui halaman Setting. |
 
 Worker menyimpan riwayat hingga 30 hari. Log worker ada di `/var/log/unbound-web/worker.log` dan log sinkronisasi di `/var/log/unbound-web/blocklist.log`.
 
+## Memperbarui Web Manager
+
+`git clone` membuat salinan pertama repository dan cukup dijalankan sekali. Untuk memperbarui salinan yang sudah ada, masuk ke folder clone lalu jalankan:
+
+```bash
+git pull --ff-only origin main && sudo bash ./install.sh
+```
+
+`origin` adalah nama remote dan `main` adalah nama branch. `--ff-only` menghentikan pembaruan jika riwayat lokal sudah bercabang. Hanya jalankan `install.sh` dari salinan repo yang dipercaya. Jika login sebagai root, jalankan tanpa `sudo`.
+
+Setelah versi ini terpasang, buka **Setting → Check for Update** untuk memperbarui dari browser. Aplikasi menjalankan `git pull --ff-only` dari repo resmi pada checkout milik root, lalu menerapkan versi baru dan memeriksa layanan. Fitur ini memperbarui kode Web Manager dan skema aplikasinya. Untuk pemasangan ulang dependensi atau konfigurasi layanan, gunakan alur terminal di atas.
+
 ## Yang perlu diperhatikan
 
-- **Port jaringan.** Pastikan TCP 8000 dapat dijangkau dari jaringan admin. Wizard membutuhkan port DNS 53 dan akses DNS keluar. Wizard dapat menghentikan `systemd-resolved` dan mengubah resolver host setelah uji lulus. Gunakan akses konsol jika host sudah menjalankan DNS untuk sistem lain.
+- **Port jaringan.** Pastikan TCP 8000 dapat dijangkau dari jaringan admin. Wizard membutuhkan port 53 pada alamat loopback dan akses DNS keluar. Di VM, wizard dapat menghentikan `systemd-resolved` setelah Unbound lulus uji. LXC perlu systemd dan jaringan yang mengizinkan layanan di dalam container.
 - **Akses SSH.** Sebelum mengaktifkan UFW, pastikan aturan SSH dan port web sudah benar. Pada aturan IN, IP/CIDR adalah sumber. Pada aturan OUT, IP/CIDR adalah tujuan. Aturan lanjutan tampil dalam mode baca saja. Periksa urutan aturan setelah mengubah port, arah, protokol, atau alamat karena aturan pengganti ditambahkan di akhir.
 - **Pemeriksaan awal.** Jika halaman gagal dibuka, periksa `sudo nginx -t`, `sudo systemctl status nginx php8.4-fpm mysql`, dan hasil `curl -fsS http://127.0.0.1:8000/api/metrics` dari server.
 - **Aset browser.** Browser mengambil Tailwind CSS, Font Awesome, dan Chart.js dari CDN. Tampilan lengkap dan grafik memerlukan akses CDN.

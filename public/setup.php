@@ -11,7 +11,7 @@ $loggedIn = admin_logged_in();
       <div class="mt-6 rounded-xl border border-amber-400/25 bg-amber-400/10 p-4 text-sm text-amber-100">Login diperlukan sebelum source Unbound dikompilasi atau konfigurasi DNS diubah. <a class="font-semibold underline" href="/login?next=%2Fwizard">Login admin</a></div>
     <?php else: ?>
       <ol id="wizard-steps" class="mt-7 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-        <?php foreach (['Cek sistem & DNS sementara','Unduh source resmi','Kompilasi & install','Setup root hints, DNSSEC & service','Verifikasi DNS dan resolver'] as $index => $label): ?>
+        <?php foreach (['Cek sistem dan DNS','Unduh source resmi','Kompilasi & install','Setup root hints, DNSSEC & service','Verifikasi DNS dan resolver'] as $index => $label): ?>
         <li class="rounded-xl border border-slate-700 bg-slate-900/70 p-3 text-sm"><span class="mb-2 grid h-7 w-7 place-items-center rounded-full bg-slate-800 text-cyan-200"><?= $index + 1 ?></span><?= e($label) ?></li>
         <?php endforeach; ?>
       </ol>

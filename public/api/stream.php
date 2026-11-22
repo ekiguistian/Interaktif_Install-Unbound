@@ -17,6 +17,9 @@ switch ($task) {
     case 'blocklist-sync':
         $args[]='update-blocklists';
         break;
+    case 'app-update':
+        $args[] = 'app-update';
+        break;
     case 'zabbix-install':
         $server=trim((string)($payload['server']??''));
         $active=trim((string)($payload['server_active']??''));
