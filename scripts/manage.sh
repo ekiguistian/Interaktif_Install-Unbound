@@ -421,11 +421,12 @@ update_root_hints() {
 }
 
 configure_zabbix() {
-    local server="$1" active="$2" hostname="$3" config_file service binary include_dir
+    local server="$1" active="$2" hostname="$3" config_file service binary include_dir fresh=no
     valid_host "$server" || fail 'Alamat Zabbix Server tidak valid.'
     valid_host "$active" || fail 'Alamat Zabbix ServerActive tidak valid.'
     [[ "$hostname" =~ ^[A-Za-z0-9._-]{1,128}$ ]] || fail 'Hostname agent tidak valid.'
     if ! command -v zabbix_agent2 >/dev/null 2>&1 && ! command -v zabbix_agentd >/dev/null 2>&1; then
+        fresh=yes
         apt-get update
         if apt-cache show zabbix-agent2 >/dev/null 2>&1; then
             apt-get install -y zabbix-agent2
@@ -453,12 +454,58 @@ ServerActive=$active
 Hostname=$hostname
 Include=${include_dir}/*.conf
 CONF
-    install -o root -g root -m 0640 "$conf_tmp" "$config_file"
+    install -o root -g zabbix -m 0640 "$conf_tmp" "$config_file"
     rm -f -- "$conf_tmp"
-    systemctl enable --now "$service"
-    systemctl restart "$service"
-    systemctl is-active --quiet "$service" || fail 'Zabbix Agent belum aktif.'
-    info "Zabbix Agent sudah dikonfigurasi dan aktif ($service)."
+    if [[ "$fresh" == yes ]]; then
+        systemctl enable --now "$service"
+        systemctl restart "$service"
+    else
+        systemctl try-restart "$service"
+    fi
+    info "Konfigurasi Zabbix Agent disimpan ($service)."
+}
+
+zabbix_unit() {
+    if command -v zabbix_agent2 >/dev/null 2>&1; then
+        printf 'zabbix-agent2.service\n'
+    elif command -v zabbix_agentd >/dev/null 2>&1; then
+        printf 'zabbix-agent.service\n'
+    else
+        fail 'Zabbix Agent belum terpasang.'
+    fi
+}
+
+lock_unbound_config() {
+    exec 9>/run/unbound-web-config.lock
+    flock -n 9 || fail 'Konfigurasi Unbound sedang diubah. Coba lagi.'
+}
+
+set_unbound_logging() {
+    local queries="$1" replies="$2" temp backup='' tag=no
+    local dir='/etc/unbound/unbound.conf.d' check='/usr/local/sbin/unbound-checkconf'
+    local target="$dir/99-unbound-web-logging.conf"
+    [[ "$queries" == yes || "$queries" == no ]] || fail 'Nilai log query tidak valid.'
+    [[ "$replies" == yes || "$replies" == no ]] || fail 'Nilai log reply tidak valid.'
+    [[ -x "$check" && -f "$CONF_FILE" && -d "$dir" ]] || fail 'Selesaikan instalasi Unbound terlebih dahulu.'
+    lock_unbound_config
+    if [[ "$queries" == yes || "$replies" == yes ]]; then tag=yes; fi
+    temp="$(mktemp "$dir/.logging.XXXXXX")"
+    printf '    log-queries: %s\n    log-replies: %s\n    log-tag-queryreply: %s\n' "$queries" "$replies" "$tag" > "$temp"
+    chown root:unbound "$temp"
+    chmod 0640 "$temp"
+    if [[ -e "$target" ]]; then
+        backup="$(mktemp "$dir/.logging-backup.XXXXXX")"
+        cp -a -- "$target" "$backup"
+    fi
+    mv -f -- "$temp" "$target"
+    if [[ "$("$check" -o log-queries "$CONF_FILE")" != "$queries" || "$("$check" -o log-replies "$CONF_FILE")" != "$replies" ]] ||
+        ! systemctl reload unbound; then
+        if [[ -n "$backup" ]]; then mv -f -- "$backup" "$target"; else rm -f -- "$target"; fi
+        systemctl reload unbound || true
+        fail 'Konfigurasi log gagal diterapkan. Pengaturan sebelumnya dipulihkan.'
+    fi
+    if [[ -n "$backup" ]]; then rm -f -- "$backup"; fi
+    info 'Pengaturan log query dan reply disimpan.'
 }
 
 case "$action" in
@@ -514,6 +561,7 @@ case "$action" in
         ;;
     apply-config)
         (($# == 11)) || fail 'Parameter konfigurasi tidak lengkap.'
+        lock_unbound_config
         prior_config="$(mktemp /etc/unbound/unbound.conf.previous.XXXXXX)"
         if [[ -f "$CONF_FILE" ]]; then
             cp -a -- "$CONF_FILE" "$prior_config"
@@ -538,11 +586,23 @@ case "$action" in
         [[ -r "$CONF_FILE" ]] || fail 'unbound.conf belum tersedia.'
         cat -- "$CONF_FILE"
         ;;
+    unbound-logging-status)
+        [[ -x /usr/local/sbin/unbound-checkconf && -f "$CONF_FILE" ]] || fail 'Unbound belum terpasang.'
+        queries="$(/usr/local/sbin/unbound-checkconf -o log-queries "$CONF_FILE")"
+        replies="$(/usr/local/sbin/unbound-checkconf -o log-replies "$CONF_FILE")"
+        printf '%s %s\n' "$queries" "$replies"
+        ;;
+    unbound-logging-set)
+        (($# == 2)) || fail 'Pengaturan log belum lengkap.'
+        set_unbound_logging "$@"
+        ;;
     update-blocklists)
+        lock_unbound_config
         [[ -f "$APP_DIR/bin/blocklist-sync.php" ]] || fail 'Script sinkronisasi blocklist tidak ditemukan.'
         php8.4 "$APP_DIR/bin/blocklist-sync.php"
         ;;
     update-root-hints)
+        lock_unbound_config
         update_root_hints
         ;;
     blocklist-schedule)
@@ -555,35 +615,19 @@ case "$action" in
         ;;
     zabbix-service)
         (($# == 1)) || fail 'Aksi service tidak lengkap.'
+        service="$(zabbix_unit)"
         case "$1" in
-            start|stop|restart)
-                if command -v zabbix_agent2 >/dev/null 2>&1; then systemctl "$1" zabbix-agent2; else systemctl "$1" zabbix-agent; fi
-                ;;
+            start|stop|restart) systemctl "$1" "$service" ;;
+            enable|disable) systemctl "$1" --now "$service" ;;
             *) fail 'Aksi service tidak diizinkan.' ;;
         esac
         ;;
-    firewall-status)
-        ufw status numbered
+    zabbix-boot-status)
+        service="$(zabbix_unit)"
+        systemctl is-enabled "$service" || true
         ;;
-    firewall-enable)
-        ufw --force enable
-        ;;
-    firewall-add)
-        (($# == 4)) || fail 'Rule membutuhkan aksi, protokol, port, dan sumber.'
-        rule_action="$1"; protocol="$2"; port="$3"; source="$4"
-        [[ "$rule_action" == allow || "$rule_action" == deny ]] || fail 'Aksi firewall hanya allow atau deny.'
-        [[ "$protocol" == tcp || "$protocol" == udp ]] || fail 'Protokol harus tcp atau udp.'
-        valid_port "$port" || fail 'Port harus bernilai 1 sampai 65535.'
-        if [[ -n "$source" ]]; then
-            valid_cidr "$source" || fail 'IP sumber/CIDR tidak valid.'
-            ufw "$rule_action" from "$source" to any port "$port" proto "$protocol" comment 'Unbound Web'
-        else
-            ufw "$rule_action" "$port/$protocol" comment 'Unbound Web'
-        fi
-        ;;
-    firewall-delete)
-        (($# == 1)) && valid_uint "$1" && ((10#$1 <= 9999)) || fail 'Nomor rule tidak valid.'
-        ufw --force delete "$1"
+    firewall-list|firewall-enable|firewall-disable|firewall-add|firewall-update|firewall-delete)
+        exec /usr/bin/php8.4 "$APP_DIR/bin/firewall.php" "${action#firewall-}" "$@"
         ;;
     cron-view)
         [[ -r "$CRON_FILE" ]] && cat "$CRON_FILE" || info 'File cron aplikasi belum ditemukan.'

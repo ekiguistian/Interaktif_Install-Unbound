@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/functions.php';
 
-function page_start(string $title, bool $admin = false): void
+function page_start(string $title, bool $admin = false, bool $liveMonitor = false): void
 {
     $fullTitle = e($title) . ' | Unbound Web Manager';
     $csrfMeta = admin_logged_in() ? '<meta name="csrf-token" content="' . e(csrf_token()) . '">' : '';
@@ -21,37 +21,53 @@ function page_start(string $title, bool $admin = false): void
   <link rel="stylesheet" href="/assets/app.css">
 </head>
 <body class="min-h-screen bg-slate-950 text-slate-100 antialiased">
-<div class="min-h-screen lg:flex">
+<div class="min-h-screen">
 HTML;
     if ($admin) {
-        echo '<aside class="w-full border-b border-slate-800 bg-slate-900/80 p-5 lg:fixed lg:inset-y-0 lg:w-64 lg:border-b-0 lg:border-r">';
-        echo '<a href="/settings" class="flex items-center gap-3 text-lg font-semibold"><span class="grid h-10 w-10 place-items-center rounded-xl bg-cyan-400/10 text-cyan-300"><i class="fa-solid fa-shield-halved"></i></span>Unbound Control</a>';
-        echo '<nav class="mt-7 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-1">';
-        $links = [
-            ['/settings', 'Ikhtisar', 'fa-gauge-high'],
-            ['/settings/unbound', 'Konfigurasi DNS', 'fa-sliders'],
-            ['/settings/blocklists', 'Blocklist & whitelist', 'fa-shield-halved'],
-            ['/settings/zabbix', 'Zabbix Agent', 'fa-chart-line'],
-            ['/settings/firewall', 'Firewall', 'fa-fire'],
-            ['/settings/cron', 'Jadwal sistem', 'fa-clock'],
-            ['/settings/dnsperf', 'Uji dnsperf', 'fa-gauge'],
-            ['/settings/domains', 'Domain pengujian', 'fa-list'],
+        echo '<nav class="floating-nav panel" aria-label="Navigasi admin">';
+        $path = parse_url((string)($_SERVER['REQUEST_URI'] ?? ''), PHP_URL_PATH);
+        $path = str_starts_with((string)$path, '/admin/') ? '/settings/' . substr($path, 7) : $path;
+        $unboundLinks = [
+            ['/settings/unbound', 'Konfigurasi'],
+            ['/settings/blocklists', 'Blocklist & Whitelist'],
+            ['/settings/cron', 'Cron'],
+            ['/settings/dnsperf', 'Uji DNS'],
+            ['/settings/domains', 'Domain uji'],
         ];
-        foreach ($links as [$href, $label, $icon]) {
-            $active = parse_url((string)($_SERVER['REQUEST_URI'] ?? ''), PHP_URL_PATH) === $href;
+        $unboundSection = in_array($path, array_column($unboundLinks, 0), true);
+        $links = [
+            ['/settings/unbound', 'Unbound', 'fa-server', $unboundSection],
+            ['/settings/zabbix', 'Zabbix Agent', 'fa-chart-line', $path === '/settings/zabbix'],
+            ['/settings/firewall', 'Firewall', 'fa-fire', $path === '/settings/firewall'],
+        ];
+        foreach ($links as [$href, $label, $icon, $active]) {
             $classes = $active ? 'nav-link nav-active' : 'nav-link';
-            echo '<a class="' . $classes . '" href="' . e($href) . '"><i class="fa-solid ' . e($icon) . ' w-5 text-center"></i><span>' . e($label) . '</span></a>';
+            $current = $path === $href ? ' aria-current="page"' : ($active ? ' aria-current="location"' : '');
+            echo '<a class="' . $classes . '" href="' . e($href) . '"' . $current . '><i class="fa-solid ' . e($icon) . '" aria-hidden="true"></i><span>' . e($label) . '</span></a>';
         }
-        echo '</nav><div class="mt-7 flex items-center justify-between border-t border-slate-800 pt-5 text-sm text-slate-400"><a href="/" class="hover:text-cyan-300"><i class="fa-solid fa-arrow-up-right-from-square mr-2"></i>Dashboard publik</a><a href="/logout" class="hover:text-rose-300">Keluar</a></div></aside>';
-        echo '<main class="min-w-0 flex-1 p-5 sm:p-8 lg:ml-64">';
-    } else {
-        echo '<main class="mx-auto w-full max-w-7xl px-5 py-8 sm:px-8">';
+        echo '<form method="post" action="/logout"><input type="hidden" name="csrf_token" value="' . e(csrf_token()) . '">';
+        echo '<button type="submit" class="nav-link"><i class="fa-solid fa-arrow-right-from-bracket" aria-hidden="true"></i>Log Out</button></form></nav>';
+    } elseif ($liveMonitor) {
+        $needsInstall = system_status()['unbound'] === 'not-installed';
+        $destination = $needsInstall ? '/wizard' : '/settings';
+        $label = $needsInstall ? 'Install Wizard' : 'Setting';
+        $icon = $needsInstall ? 'fa-wand-magic-sparkles' : 'fa-sliders';
+        echo '<nav class="floating-nav panel" aria-label="Navigasi monitoring"><a id="main-action" class="nav-link" href="' . $destination . '"><i class="fa-solid ' . $icon . '" aria-hidden="true"></i><span id="main-action-text">' . $label . '</span></a></nav>';
     }
+    echo '<main class="mx-auto w-full max-w-7xl px-5 py-8 sm:px-8">';
     echo '<header class="mb-8 flex flex-wrap items-center justify-between gap-4"><div><p class="text-xs font-semibold uppercase tracking-[.24em] text-cyan-300">DNS Operations</p><h1 class="mt-2 text-2xl font-semibold tracking-tight">' . e($title) . '</h1></div>';
     if ($admin && admin_logged_in()) {
-        echo '<span class="rounded-full border border-slate-700 px-3 py-1.5 text-sm text-slate-300"><i class="fa-solid fa-user-shield mr-2 text-cyan-300"></i>' . e($_SESSION['admin_user']) . '</span>';
+        echo '<a class="btn-secondary" href="/">Live Monitor</a>';
     }
     echo '</header>';
+    if ($admin && $unboundSection) {
+        echo '<nav class="mb-5 flex flex-wrap gap-2" aria-label="Pengaturan Unbound">';
+        foreach ($unboundLinks as [$href, $label]) {
+            $current = $path === $href ? ' aria-current="page"' : '';
+            echo '<a class="nav-link' . ($current !== '' ? ' nav-active' : '') . '" href="' . e($href) . '"' . $current . '>' . e($label) . '</a>';
+        }
+        echo '</nav>';
+    }
 }
 
 function page_end(): void

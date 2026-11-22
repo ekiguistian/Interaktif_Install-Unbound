@@ -2,6 +2,8 @@
 declare(strict_types=1);
 require_once __DIR__ . '/../../app/layout.php';
 require_admin();
+$logging = CommandRunner::run(['/usr/bin/sudo', '-n', '/usr/local/sbin/unbound-web-manage', 'unbound-logging-status'], 20);
+$loggingReady = $logging['code'] === 0 && preg_match('/^(yes|no) (yes|no)$/D', trim($logging['output']), $logValues);
 page_start('Konfigurasi Unbound', true);
 ?>
 <section class="grid gap-5 xl:grid-cols-[1fr_.85fr]">
@@ -32,5 +34,27 @@ page_start('Konfigurasi Unbound', true);
     </div>
     <pre data-page-result class="mt-5 max-h-[38rem] min-h-64 overflow-auto rounded-xl border border-slate-700 bg-black/50 p-4 font-mono text-xs leading-6 text-emerald-200">Klik “Muat file” untuk membaca konfigurasi aktif.</pre>
   </div>
+</section>
+<section class="panel mt-5 p-5 sm:p-6">
+  <h2 class="font-semibold">Log query dan reply</h2>
+  <?php if ($loggingReady): ?>
+    <form class="mt-4 space-y-4" data-api="unbound-logging-set">
+      <div class="grid gap-4 sm:grid-cols-2">
+        <?php foreach (['log_queries' => ['Log query', $logValues[1]], 'log_replies' => ['Log reply', $logValues[2]]] as $name => [$label, $value]): ?>
+          <label>
+            <span class="mb-2 block text-sm"><?= e($label) ?></span>
+            <select class="form-select" name="<?= e($name) ?>">
+              <option value="no" <?= $value === 'no' ? 'selected' : '' ?>>Nonaktif</option>
+              <option value="yes" <?= $value === 'yes' ? 'selected' : '' ?>>Aktif</option>
+            </select>
+          </label>
+        <?php endforeach; ?>
+      </div>
+      <button class="btn-primary" type="submit">Simpan pengaturan log</button>
+      <p data-result role="status" class="text-sm text-cyan-200"></p>
+    </form>
+  <?php else: ?>
+    <p class="mt-3 text-sm text-slate-400">Status log belum dapat dibaca.</p>
+  <?php endif; ?>
 </section>
 <?php page_end(); ?>

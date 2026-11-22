@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 require_once __DIR__ . '/../../app/layout.php';
-page_start('Monitoring resolver');
+page_start('Monitoring resolver', liveMonitor: true);
 ?>
 <section class="panel mb-6 overflow-hidden p-6 sm:p-8">
   <div class="grid items-center gap-8 lg:grid-cols-[1.35fr_.65fr]">
@@ -9,10 +9,6 @@ page_start('Monitoring resolver');
       <span class="inline-flex items-center gap-2 rounded-full border border-cyan-400/20 bg-cyan-400/10 px-3 py-1 text-xs font-medium text-cyan-200"><span class="h-2 w-2 animate-pulse rounded-full bg-cyan-300"></span>Unbound DNS Operations</span>
       <h2 class="mt-5 max-w-2xl text-3xl font-semibold tracking-tight sm:text-4xl">Resolver berjalan, metrik terbaca.</h2>
       <p class="mt-4 max-w-2xl leading-7 text-slate-400">Pantau layanan DNS, cache, kueri, dan trafik interface server. Data metrik diperbarui oleh worker setiap menit.</p>
-      <div class="mt-6 flex flex-wrap gap-3">
-        <a id="main-action" href="/wizard" class="btn-primary"><i class="fa-solid fa-wand-magic-sparkles"></i><span id="main-action-text">Setup Unbound</span></a>
-        <a href="/login" class="btn-secondary"><i class="fa-solid fa-lock"></i>Login admin</a>
-      </div>
     </div>
     <div class="hidden justify-end lg:flex"><div class="grid h-44 w-44 place-items-center rounded-full border border-cyan-300/15 bg-cyan-300/[.04]"><div class="grid h-32 w-32 place-items-center rounded-full border border-cyan-300/25 bg-slate-950 text-5xl text-cyan-300 shadow-[0_0_60px_rgba(34,211,238,.12)]"><i class="fa-solid fa-network-wired"></i></div></div></div>
   </div>

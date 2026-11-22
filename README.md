@@ -58,13 +58,24 @@ Worker menulis log di `/var/log/unbound-web/worker.log`; hasil sinkronisasi bloc
 
 ### Modul Settings
 
-- **Konfigurasi Unbound**: interface, port, access-control, thread, cache size dan slabs, TTL, prefetch, dan hardening DNSSEC. Konfigurasi divalidasi dengan `unbound-checkconf` sebelum service di-reload. File aktif tersedia dalam tampilan read-only.
+- **Konfigurasi Unbound**: interface, port, access-control, thread, cache size dan slabs, TTL, prefetch, dan hardening DNSSEC. Log query dan reply dapat diaktifkan secara terpisah. Konfigurasi divalidasi dengan `unbound-checkconf` sebelum service di-reload. File aktif tersedia dalam tampilan baca saja.
 - **Blocklist/whitelist**: tambah, ubah, aktifkan, nonaktifkan, dan hapus URL HTTPS atau domain whitelist. Parser mendukung hosts, Adblock `||domain^`, dan domain biasa. Download dipatok ke alamat IP publik yang sudah divalidasi, tanpa mengikuti redirect. Update memfilter whitelist, memvalidasi konfigurasi, lalu reload Unbound.
-- **Zabbix Agent**: pasang Agent 2 jika tersedia, atau Agent klasik. Isi `Server`, `ServerActive`, dan `Hostname`; lihat status, ubah konfigurasi, serta jalankan start/restart/stop.
-- **Firewall**: lihat rule UFW, tambah/hapus rule incoming TCP/UDP, batasi sumber ke IP/CIDR, atau aktifkan UFW. UFW tidak diaktifkan otomatis. Pastikan rule SSH tersedia sebelum mengaktifkannya.
+- **Zabbix Agent**: pasang Agent 2 jika tersedia, atau Agent klasik. Isi `Server`, `ServerActive`, dan `Hostname`. Tombol **Enable** menjalankan agent dan mengaktifkannya saat boot. Tombol **Disable** menghentikan agent dan menonaktifkannya saat boot. Agent berjalan sebagai service systemd.
+- **Firewall**: buka **Firewall** dari navbar admin. Halaman ini menampilkan status dan tombol **Enable UFW** serta **Disable UFW**. Siapkan aturan SSH dan port web sebelum mengaktifkan UFW.
 - **Jadwal cron**: lihat job aplikasi, pilih interval blocklist, tambah/ubah/hapus jadwal root hints atau sinkronisasi blocklist. Perintah custom dibatasi ke tugas internal.
 - **dnsperf**: atur target IPv4 private atau loopback, port, durasi maksimal 300 detik, client, thread, dan QPS. Nilai QPS `0` berarti tanpa batas QPS. Hasil tampil langsung melalui SSE.
 - **Domain pengujian**: CRUD domain dan tipe query `A`, `AAAA`, `MX`, `TXT`, `NS`, atau `CNAME`. Installer menambahkan 100 domain umum sebagai awal.
+
+### Mengatur UFW
+
+1. Buka **Firewall** dari navbar admin. Pilih **Allow** atau **Deny**, arah **IN** atau **OUT**, protokol TCP/UDP, dan port tujuan.
+2. Isi IP/CIDR untuk membatasi sumber trafik **IN** atau tujuan trafik **OUT**. Alamat dapat berupa IPv4 atau IPv6. Kolom kosong berlaku untuk semua alamat dalam keluarga IP yang aktif di UFW.
+3. Gunakan filter **IN** atau **OUT** untuk melihat aturan. Buka aturan untuk mengubah atau menghapusnya. Aturan lanjutan seperti routing dan profil aplikasi tampil dalam daftar **Semua** dan dikelola melalui terminal.
+4. Klik **Enable UFW** atau **Disable UFW** di toolbar untuk mengubah status firewall. Aturan tersimpan tetap terlihat ketika UFW nonaktif.
+
+Mengubah aksi saja memakai mekanisme pembaruan UFW. Perubahan port, arah, protokol, atau IP/CIDR menambahkan aturan pengganti di akhir daftar. Periksa urutannya jika ada aturan yang saling tumpang tindih.
+
+Navbar admin berisi **Unbound**, **Zabbix Agent**, **Firewall**, dan **Log Out**. Submenu Unbound memuat konfigurasi, blocklist/whitelist, cron, uji DNS, dan domain uji. Navbar Live Monitor menampilkan **Install Wizard** sebelum Unbound terpasang dan **Setting** setelah terpasang.
 
 ### Keamanan Web Manager
 

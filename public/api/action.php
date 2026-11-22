@@ -45,6 +45,15 @@ try {
             $result = CommandRunner::run(['/usr/bin/sudo','-n','/usr/local/sbin/unbound-web-manage','view-config'], 10);
             json_response(['ok' => $result['code'] === 0, 'config' => $result['output'], 'message' => $result['code'] === 0 ? '' : trim($result['output'])], $result['code'] === 0 ? 200 : 422);
 
+        case 'unbound-logging-set':
+            $queries = $payload['log_queries'] ?? '';
+            $replies = $payload['log_replies'] ?? '';
+            if (!in_array($queries, ['yes', 'no'], true) || !in_array($replies, ['yes', 'no'], true)) {
+                fail_validation('Pilih status log query dan reply.');
+            }
+            $result = CommandRunner::run(['/usr/bin/sudo', '-n', '/usr/local/sbin/unbound-web-manage', 'unbound-logging-set', $queries, $replies], 45);
+            json_response(['ok' => $result['code'] === 0, 'message' => trim($result['output'])], $result['code'] === 0 ? 200 : 422);
+
         case 'blocklist-add':
             $name = trim((string)($payload['name'] ?? ''));
             $url = trim((string)($payload['url'] ?? ''));
@@ -115,33 +124,47 @@ try {
 
         case 'zabbix-service':
             $serviceAction = (string)($payload['service_action'] ?? '');
-            if (!in_array($serviceAction,['start','stop','restart'],true)) fail_validation('Aksi service tidak valid.');
+            if (!in_array($serviceAction,['start','stop','restart','enable','disable'],true)) fail_validation('Aksi service tidak valid.');
             $result = CommandRunner::run(['/usr/bin/sudo','-n','/usr/local/sbin/unbound-web-manage','zabbix-service',$serviceAction], 30);
             refresh_system_status_cache();
             json_response(['ok' => $result['code'] === 0, 'message' => trim($result['output']) ?: 'Aksi service selesai.'], $result['code'] === 0 ? 200 : 422);
 
-        case 'firewall-status':
-            $result = CommandRunner::run(['/usr/bin/sudo','-n','/usr/local/sbin/unbound-web-manage','firewall-status']);
-            json_response(['ok' => $result['code'] === 0, 'output' => $result['output']], $result['code'] === 0 ? 200 : 422);
-
         case 'firewall-add':
-            $ruleAction=(string)($payload['rule_action']??''); $protocol=(string)($payload['protocol']??'');
-            $port=filter_var($payload['port']??null,FILTER_VALIDATE_INT); $source=trim((string)($payload['source']??''));
-            if (!in_array($ruleAction,['allow','deny'],true) || !in_array($protocol,['tcp','udp'],true)) fail_validation('Pilih aksi allow/deny dan protokol TCP/UDP.');
-            if ($port===false || $port<1 || $port>65535) fail_validation('Port harus 1 sampai 65535.');
-            if ($source!=='' && !valid_ip_or_cidr($source)) fail_validation('IP sumber/CIDR tidak valid.');
-            $result=CommandRunner::run(['/usr/bin/sudo','-n','/usr/local/sbin/unbound-web-manage','firewall-add',$ruleAction,$protocol,(string)$port,$source],30);
-            json_response(['ok'=>$result['code']===0,'message'=>trim($result['output'])],$result['code']===0?200:422);
-
+        case 'firewall-update':
         case 'firewall-delete':
-            $number=filter_var($payload['number']??null,FILTER_VALIDATE_INT);
-            if ($number===false || $number<1 || $number>9999) fail_validation('Nomor rule tidak valid.');
-            $result=CommandRunner::run(['/usr/bin/sudo','-n','/usr/local/sbin/unbound-web-manage','firewall-delete',(string)$number],30);
-            json_response(['ok'=>$result['code']===0,'message'=>trim($result['output'])],$result['code']===0?200:422);
+            $args = ['/usr/bin/sudo', '-n', '/usr/local/sbin/unbound-web-manage', $action];
+            if ($action !== 'firewall-add') {
+                $id = $payload['id'] ?? '';
+                if (!is_string($id) || !preg_match('/^[a-f0-9]{64}$/D', $id)) {
+                    fail_validation('ID aturan tidak valid. Muat ulang halaman.');
+                }
+                $args[] = $id;
+            }
+            if ($action !== 'firewall-delete') {
+                $ruleAction = $payload['rule_action'] ?? '';
+                $direction = $payload['direction'] ?? '';
+                $protocol = $payload['protocol'] ?? '';
+                $port = filter_var($payload['port'] ?? null, FILTER_VALIDATE_INT);
+                $peer = $payload['peer'] ?? '';
+                if (!in_array($ruleAction, ['allow', 'deny'], true) || !in_array($direction, ['in', 'out'], true)
+                    || !in_array($protocol, ['tcp', 'udp'], true) || $port === false || $port < 1 || $port > 65535) {
+                    fail_validation('Pilih Allow/Deny, IN/OUT, TCP/UDP, dan port 1–65535.');
+                }
+                if (!is_string($peer) || (trim($peer) !== '' && !valid_ip_or_cidr(trim($peer)))) {
+                    fail_validation('Masukkan IP atau CIDR IPv4/IPv6 yang valid.');
+                }
+                array_push($args, $ruleAction, $direction, $protocol, (string)$port, trim($peer));
+            }
+            $result = CommandRunner::run($args, 45);
+            json_response(['ok' => $result['code'] === 0, 'message' => trim($result['output'])], $result['code'] === 0 ? 200 : 422);
 
         case 'firewall-enable':
-            if (($payload['confirm'] ?? '') !== 'ENABLE') fail_validation('Konfirmasi ENABLE diperlukan.');
-            $result=CommandRunner::run(['/usr/bin/sudo','-n','/usr/local/sbin/unbound-web-manage','firewall-enable'],30);
+        case 'firewall-disable':
+            $confirmation = $action === 'firewall-enable' ? 'ENABLE' : 'DISABLE';
+            if (($payload['confirm'] ?? '') !== $confirmation) {
+                fail_validation('Konfirmasi perubahan status UFW diperlukan.');
+            }
+            $result=CommandRunner::run(['/usr/bin/sudo','-n','/usr/local/sbin/unbound-web-manage',$action],30);
             json_response(['ok'=>$result['code']===0,'message'=>trim($result['output'])],$result['code']===0?200:422);
 
         case 'cron-view':

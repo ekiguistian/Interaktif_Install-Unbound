@@ -4,6 +4,7 @@
   document.querySelectorAll('form[data-api]').forEach((form) => {
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
+      if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) return;
       const button = form.querySelector('[type="submit"]');
       const output = form.querySelector('[data-result]') || document.querySelector('[data-page-result]');
       if (button) { button.disabled = true; button.dataset.oldText = button.innerHTML; button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Memproses'; }
@@ -17,7 +18,7 @@
         const result = await response.json();
         if (output) {
           if (form.dataset.api === 'config-view') output.textContent = result.config || result.message || '';
-          else if (['firewall-status','cron-view'].includes(form.dataset.api)) output.textContent = result.output || result.message || '';
+          else if (form.dataset.api === 'cron-view') output.textContent = result.output || result.message || '';
           else output.textContent = result.message || (result.ok ? 'Berhasil.' : 'Permintaan gagal.');
         }
         if (result.ok && form.dataset.reload !== 'false') setTimeout(() => location.reload(), 700);
@@ -133,8 +134,8 @@
       const actionText = document.getElementById('main-action-text');
       if (action && actionText) {
         const installed = payload.services.unbound !== 'not-installed';
-        action.href = installed ? '/login' : '/wizard';
-        actionText.textContent = installed ? 'Settings' : 'Setup Unbound';
+        action.href = installed ? '/settings' : '/wizard';
+        actionText.textContent = installed ? 'Setting' : 'Install Wizard';
         action.querySelector('i').className = installed ? 'fa-solid fa-sliders' : 'fa-solid fa-wand-magic-sparkles';
       }
       setText('unbound-version', payload.services.unbound_version ? 'Versi ' + payload.services.unbound_version : 'Versi belum tersedia');
