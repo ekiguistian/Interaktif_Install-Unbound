@@ -1,6 +1,0 @@
-# Replace these sample values before installing the agent configuration.
-PidFile=/run/zabbix/zabbix_agentd.pid
-LogType=system
-Server=192.168.1.20
-ServerActive=192.168.1.20
-Hostname=unbound-server
