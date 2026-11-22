@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS metrics (
     memory_total_mb BIGINT UNSIGNED NOT NULL DEFAULT 0,
     disk_used_gb DECIMAL(12,3) NOT NULL DEFAULT 0,
     disk_total_gb DECIMAL(12,3) NOT NULL DEFAULT 0,
+    sample_json JSON NULL,
     uptime_seconds BIGINT UNSIGNED NOT NULL DEFAULT 0,
     INDEX idx_metrics_recorded_at (recorded_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
@@ -64,10 +65,3 @@ CREATE TABLE IF NOT EXISTS login_attempts (
     attempted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_login_attempts_addr_time (remote_addr, attempted_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
-
-INSERT INTO app_settings (setting_key, setting_value) VALUES
-    ('blocklist_schedule', 'daily'),
-    ('zabbix_server', ''),
-    ('zabbix_server_active', ''),
-    ('zabbix_hostname', '')
-ON DUPLICATE KEY UPDATE setting_key = VALUES(setting_key);

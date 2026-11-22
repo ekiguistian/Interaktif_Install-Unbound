@@ -35,6 +35,7 @@ function load_app_env(string $file): array
 try {
     $APP_CONFIG = load_app_env(APP_ENV_FILE);
 } catch (Throwable $error) {
+    if (PHP_SAPI === 'cli') { fwrite(STDERR, $error->getMessage() . PHP_EOL); exit(1); }
     http_response_code(503);
     header('Content-Type: text/plain; charset=utf-8');
     echo $error->getMessage(), "\n";
@@ -70,6 +71,7 @@ function db(): PDO
 
 if (PHP_SAPI !== 'cli') {
     $secure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off');
+    header('Cache-Control: no-store');
     session_name('unbound_web_session');
     session_set_cookie_params([
         'lifetime' => 0,
@@ -85,5 +87,5 @@ if (PHP_SAPI !== 'cli') {
     header('X-Frame-Options: DENY');
     header('Referrer-Policy: no-referrer');
     header('Permissions-Policy: camera=(), microphone=(), geolocation=()');
-    header("Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; font-src 'self' https://cdnjs.cloudflare.com data:; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'");
+    header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; font-src 'self' https://cdnjs.cloudflare.com data:; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'");
 }

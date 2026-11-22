@@ -17,9 +17,7 @@
         });
         const result = await response.json();
         if (output) {
-          if (form.dataset.api === 'config-view') output.textContent = result.config || result.message || '';
-          else if (form.dataset.api === 'cron-view') output.textContent = result.output || result.message || '';
-          else output.textContent = result.message || (result.ok ? 'Berhasil.' : 'Permintaan gagal.');
+          output.textContent = result.message || (result.ok ? 'Berhasil.' : 'Permintaan gagal.');
         }
         if (result.ok && form.dataset.reload !== 'false') setTimeout(() => location.reload(), 700);
       } catch (error) {
@@ -36,20 +34,7 @@
       if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) return;
       const button = form.querySelector('[type="submit"]');
       const output = document.querySelector(form.dataset.output || '[data-stream-output]');
-      let wizardCompleted = false;
-      const isWizard = form.dataset.stream === 'wizard';
-      const wizardButtonText = isWizard ? form.querySelector('[data-wizard-button]') : null;
-      const wizardStepInput = isWizard ? form.querySelector('[data-wizard-step]') : null;
-      const wizardTotalSteps = isWizard ? document.querySelectorAll('#wizard-steps li').length : 0;
-      if (button) {
-        button.disabled = true;
-        if (isWizard) {
-          if (wizardButtonText) wizardButtonText.textContent = 'Berjalan';
-        } else {
-          button.dataset.oldText = button.innerHTML;
-          button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Berjalan';
-        }
-      }
+      if (button) { button.disabled = true; button.dataset.oldText = button.innerHTML; button.textContent = 'Berjalan…'; }
       if (output) { output.textContent = ''; output.classList.remove('text-rose-300'); }
       try {
         const payload = Object.fromEntries(new FormData(form).entries());
@@ -90,109 +75,89 @@
           throw new Error('Streaming berakhir tanpa status akhir dari server.');
         }
         if (output && /\[PROSES GAGAL:/.test(output.textContent)) output.classList.add('text-rose-300');
-        if (isWizard) {
-          const currentStep = Number(wizardStepInput?.value);
-          if (streamExitCode === 0 && Number.isInteger(currentStep) && currentStep >= 1 && currentStep <= wizardTotalSteps) {
-            const nextStep = currentStep + 1;
-            document.querySelectorAll('#wizard-steps li').forEach((item, index) => {
-              if (index < currentStep) item.classList.add('border-emerald-400/40','text-emerald-200');
-            });
-            if (nextStep <= wizardTotalSteps) {
-              wizardStepInput.value = String(nextStep);
-              if (wizardButtonText) wizardButtonText.textContent = 'Jalankan tahap ' + nextStep;
-            } else {
-              wizardCompleted = true;
-              if (wizardButtonText) wizardButtonText.textContent = 'Instalasi selesai';
-            }
-          } else if (wizardButtonText) {
-            wizardButtonText.textContent = 'Ulangi tahap ' + (wizardStepInput?.value || '1');
-          }
-        }
       } catch (error) {
         if (output) { output.textContent += '\n' + error.message; output.classList.add('text-rose-300'); }
-        if (isWizard && wizardButtonText) wizardButtonText.textContent = 'Ulangi tahap ' + (wizardStepInput?.value || '1');
       } finally {
         if (button) {
-          button.disabled = wizardCompleted;
-          if (!isWizard) button.innerHTML = button.dataset.oldText;
+          button.disabled = false;
+          button.innerHTML = button.dataset.oldText;
         }
       }
     });
   });
 
-  const dashboard = document.querySelector('[data-dashboard]');
-  if (!dashboard) return;
-  const fmt = new Intl.NumberFormat('id-ID');
-  const setText = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
-  const statusClass = (value) => value === 'active' ? 'text-emerald-300' : value === 'inactive' ? 'text-amber-300' : 'text-slate-500';
-  let qpsChart, trafficChart, cacheChart;
-
-  function buildChart(elementId, title, labels, datasets) {
-    const canvas = document.getElementById(elementId);
-    if (!canvas || !window.Chart) return null;
-    return new Chart(canvas, {
-      type: 'line', data: {labels, datasets},
-      options: {responsive:true, maintainAspectRatio:false, interaction:{intersect:false,mode:'index'},
-        plugins:{legend:{labels:{color:'#cbd5e1'}},title:{display:false,text:title},tooltip:{mode:'index',intersect:false}},
-        scales:{x:{ticks:{color:'#64748b',maxTicksLimit:8},grid:{color:'rgba(148,163,184,.08)'}},y:{beginAtZero:true,ticks:{color:'#64748b'},grid:{color:'rgba(148,163,184,.08)'}}}}
-    });
+  for (const select of document.querySelectorAll('select[name="protocol"]')) {
+    const port = select.form.elements.port;
+    const toggle = () => { port.disabled = !['tcp','udp','tcp-udp'].includes(select.value); };
+    select.addEventListener('change', toggle);
+    toggle();
   }
-
-  async function refresh() {
-    try {
-      const response = await fetch('/api/metrics', {cache:'no-store'});
-      const payload = await response.json();
-      if (!response.ok || !payload.ok) throw new Error(payload.message || 'Metrik belum tersedia');
-      for (const name of ['unbound','zabbix']) {
-        const el = document.getElementById('status-' + name);
-        if (el) { el.textContent = payload.services[name] || 'unknown'; el.className = 'mt-2 text-xl font-semibold ' + statusClass(el.textContent); }
-      }
-      const action = document.getElementById('main-action');
-      const actionText = document.getElementById('main-action-text');
-      if (action && actionText) {
-        const running = payload.services.unbound === 'active';
-        action.href = running ? '/settings' : '/wizard';
-        actionText.textContent = running ? 'Setting' : 'Install Wizard';
-        action.querySelector('i').className = running ? 'fa-solid fa-sliders' : 'fa-solid fa-wand-magic-sparkles';
-      }
-      setText('unbound-version', payload.services.unbound_version ? 'Versi ' + payload.services.unbound_version : 'Versi belum tersedia');
-      const latest = payload.latest || {};
-      setText('metric-queries', fmt.format(latest.total_queries || 0));
-      setText('metric-replies', fmt.format(latest.total_replies || 0));
-      setText('metric-cache', Number(latest.cache_hit_ratio || 0).toLocaleString('id-ID',{maximumFractionDigits:2}) + '%');
-      setText('metric-qps', Number(latest.qps || 0).toLocaleString('id-ID',{maximumFractionDigits:2}));
-      const bandwidth = (bytesPerSecond) => {
-        const bits = Number(bytesPerSecond || 0) * 8;
-        return bits >= 1000000 ? (bits / 1000000).toLocaleString('id-ID',{maximumFractionDigits:2}) + ' Mbps' : (bits / 1000).toLocaleString('id-ID',{maximumFractionDigits:1}) + ' Kbps';
-      };
-      setText('metric-rx', bandwidth(latest.rx_bps));
-      setText('metric-tx', bandwidth(latest.tx_bps));
-      setText('metric-recursion', Number(latest.recursion_avg_ms || 0).toLocaleString('id-ID',{maximumFractionDigits:2}) + ' ms');
-      setText('metric-cpu', Number(latest.cpu_percent || 0).toLocaleString('id-ID',{maximumFractionDigits:1}) + '%');
-      setText('metric-load', [latest.load_1m,latest.load_5m,latest.load_15m].map((value) => Number(value || 0).toLocaleString('id-ID',{maximumFractionDigits:2})).join(' / '));
-      setText('metric-memory', fmt.format(latest.memory_used_mb || 0) + ' / ' + fmt.format(latest.memory_total_mb || 0) + ' MB');
-      setText('metric-disk', Number(latest.disk_used_gb || 0).toLocaleString('id-ID',{maximumFractionDigits:1}) + ' / ' + Number(latest.disk_total_gb || 0).toLocaleString('id-ID',{maximumFractionDigits:1}) + ' GB');
-      const up = Number(latest.uptime_seconds || 0);
-      setText('metric-uptime', Math.floor(up / 86400) + ' hari ' + Math.floor((up % 86400) / 3600) + ' jam');
-      const breakdown = (data) => Object.entries(data || {}).sort((a,b) => b[1]-a[1]).slice(0,8).map(([name,value]) => name + ': ' + fmt.format(value)).join(' · ') || 'Belum ada kueri';
-      setText('query-types', breakdown(latest.query_types));
-      setText('response-codes', breakdown(latest.response_codes));
-      setText('updated-at', latest.recorded_at || 'Belum ada data worker');
-      const labels = payload.history.map(row => row.recorded_at?.slice(11,16) || '');
-      const qps = payload.history.map(row => Number(row.qps || 0));
-      const rx = payload.history.map(row => Number(row.rx_bps || 0) * 8 / 1000000);
-      const tx = payload.history.map(row => Number(row.tx_bps || 0) * 8 / 1000000);
-      const cache = payload.history.map(row => Number(row.cache_hit_ratio || 0));
-      if (!qpsChart) qpsChart = buildChart('qps-chart','QPS',labels,[{label:'QPS',data:qps,borderColor:'#22d3ee',backgroundColor:'rgba(34,211,238,.12)',fill:true,tension:.3,pointRadius:1}]);
-      else {qpsChart.data.labels=labels;qpsChart.data.datasets[0].data=qps;qpsChart.update('none');}
-      if (!trafficChart) trafficChart = buildChart('traffic-chart','Traffic',labels,[{label:'RX Mbps',data:rx,borderColor:'#34d399',tension:.3,pointRadius:1},{label:'TX Mbps',data:tx,borderColor:'#818cf8',tension:.3,pointRadius:1}]);
-      else {trafficChart.data.labels=labels;trafficChart.data.datasets[0].data=rx;trafficChart.data.datasets[1].data=tx;trafficChart.update('none');}
-      if (!cacheChart) cacheChart = buildChart('cache-chart','Cache Hit',labels,[{label:'Cache Hit %',data:cache,borderColor:'#fbbf24',backgroundColor:'rgba(251,191,36,.1)',fill:true,tension:.3,pointRadius:1}]);
-      else {cacheChart.data.labels=labels;cacheChart.data.datasets[0].data=cache;cacheChart.update('none');}
-    } catch (error) {
-      setText('updated-at', 'Metrik belum tersedia: ' + error.message);
+  if (!document.querySelector('[data-dashboard]')) return;
+  const byId = id => document.getElementById(id);
+  const show = (id, value) => { byId(id).textContent = value; };
+  const num = new Intl.NumberFormat('id-ID', {maximumFractionDigits:2});
+  const fmt = (value, unit = '') => value == null ? '—' : num.format(value) + (unit ? ' ' + unit : '');
+  const rate = bits => bits == null ? '—' : bits >= 1000000 ? fmt(bits / 1000000, 'Mbps') : fmt(bits / 1000, 'kbps');
+  const charts = new Map();
+  const units = {qps:'QPS', cache_hit_ratio:'%', recursion_avg_ms:'ms', cpu_percent:'%', memory_used_mb:'MiB', disk_used_gb:'GiB'};
+  let payload;
+  function plot(key, series, unit) {
+    if (!window.Chart) return;
+    const labels = payload.history.map(row => row.recorded_at.slice(11,16));
+    const datasets = series.map(([label, data], i) => ({
+      label, data, borderColor:i ? '#a5b4fc' : '#2dd4bf', pointRadius:1, borderWidth:2
+    }));
+    const formatter = key === 'network' ? rate : value => fmt(value, unit);
+    if (!charts.has(key)) {
+      charts.set(key,new Chart(byId('chart-' + key), {type:'line',data:{labels,datasets},options:{
+        responsive:true, maintainAspectRatio:false, animation:false, interaction:{mode:'index',intersect:false},
+        plugins:{legend:{display:key === 'network'}, tooltip:{callbacks:{label:item=>item.dataset.label + ' · ' + formatter(item.parsed.y)}}},
+        scales:{x:{ticks:{maxTicksLimit:5}},y:{beginAtZero:true,ticks:{maxTicksLimit:4,callback:formatter}}}
+      }}));
+    } else {
+      const chart = charts.get(key);
+      chart.data = {labels,datasets};
+      chart.update('none');
     }
   }
+  function render() {
+    const rows = payload.history;
+    const latest = rows.at(-1) || {};
+    show('host', payload.host);
+    show('system-info', payload.os + ' · kernel ' + payload.kernel);
+    show('service', [payload.services.unbound, payload.services.unbound_version, latest.epoch && latest.total_queries == null ? 'statistik belum tersedia' : ''].filter(Boolean).join(' · '));
+    show('sample', latest.epoch ? latest.recorded_at + (payload.now - latest.epoch > 125 ? ' · data terlambat' : '') : 'Belum ada sampel');
+    for (const [key,unit] of Object.entries(units)) {
+      const total = key === 'memory_used_mb' ? latest.memory_total_mb : key === 'disk_used_gb' ? latest.disk_total_gb : null;
+      show('value-' + key, total == null ? fmt(latest[key], unit) : fmt(latest[key]) + ' / ' + fmt(total,unit));
+      plot(key, [[unit,rows.map(row=>row[key] == null ? null : Number(row[key]))]], unit);
+    }
+    const select = byId('interface');
+    const names = Object.keys(latest.network || {});
+    const selected = names.includes(select.value) ? select.value : names.includes(payload.interface) ? payload.interface : names.find(n => n !== 'lo') || names[0];
+    select.replaceChildren(...names.map(n => new Option(n,n,false,n === selected)));
+    const traffic = latest.network?.[selected] || {};
+    show('value-network', 'RX ' + rate(traffic.rx) + ' · TX ' + rate(traffic.tx));
+    plot('network',['rx','tx'].map(key=>[key.toUpperCase(),rows.map(row=>row.network[selected]?.[key] ?? null)]),'');
+    show('detail-queries',fmt(latest.total_queries));
+    show('detail-replies',fmt(latest.total_replies));
+    show('detail-load',['load_1m','load_5m','load_15m'].map(k=>fmt(latest[k])).join(' / '));
+    show('detail-uptime', latest.uptime_seconds == null ? '—' : Math.floor(latest.uptime_seconds/86400) + ' hari ' + Math.floor(latest.uptime_seconds%86400/3600) + ' jam');
+    for (const [id, data] of [['types',latest.query_types], ['codes',latest.response_codes]]) {
+      show('detail-' + id, latest.total_queries == null ? '—' : Object.entries(data || {}).map(([name,value])=>name+' '+fmt(value)).join(' · ') || '—');
+    }
+  }
+  byId('interface').addEventListener('change',render);
+  async function refresh() {
+    try {
+      const response = await fetch('/api/metrics',{cache:'no-store'});
+      if (response.status === 401) { location.assign('/login'); return; }
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message);
+      payload = data;
+      render();
+    } catch (error) { show('sample',error.message); }
+    setTimeout(refresh,10000);
+  }
   refresh();
-  window.setInterval(refresh, 10000);
 })();

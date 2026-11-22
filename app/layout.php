@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/functions.php';
 
-function page_start(string $title, bool $admin = false, bool $liveMonitor = false): void
+function page_start(string $title, bool $admin = false): void
 {
     $fullTitle = e($title) . ' | Unbound Web Manager';
     $csrfMeta = admin_logged_in() ? '<meta name="csrf-token" content="' . e(csrf_token()) . '">' : '';
@@ -16,9 +16,9 @@ function page_start(string $title, bool $admin = false, bool $liveMonitor = fals
   <meta name="viewport" content="width=device-width, initial-scale=1">
   $csrfMeta
   <title>$fullTitle</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/assets/utilities.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <script src="/assets/chart.umd.js"></script>
   <link rel="stylesheet" href="/assets/app.css?v=$cssVersion">
 </head>
 <body class="min-h-screen bg-slate-950 text-slate-100 antialiased">
@@ -29,7 +29,7 @@ HTML;
         $path = parse_url((string)($_SERVER['REQUEST_URI'] ?? ''), PHP_URL_PATH);
         $path = str_starts_with((string)$path, '/admin/') ? '/settings/' . substr($path, 7) : $path;
         $unboundLinks = [
-            ['/settings/unbound', 'Konfigurasi'],
+            ['/settings/unbound', 'Kontrol & file'],
             ['/settings/blocklists', 'Blocklist & Whitelist'],
             ['/settings/cron', 'Cron'],
             ['/settings/dnsperf', 'Uji DNS'],
@@ -37,6 +37,7 @@ HTML;
         ];
         $unboundSection = in_array($path, array_column($unboundLinks, 0), true);
         $links = [
+            ['/', 'Monitor', 'fa-wave-square', $path === '/'],
             ['/settings/unbound', 'Unbound', 'fa-server', $unboundSection],
             ['/settings/zabbix', 'Zabbix Agent', 'fa-chart-line', $path === '/settings/zabbix'],
             ['/settings/firewall', 'Firewall', 'fa-fire', $path === '/settings/firewall'],
@@ -48,18 +49,9 @@ HTML;
         }
         echo '<form method="post" action="/logout"><input type="hidden" name="csrf_token" value="' . e(csrf_token()) . '">';
         echo '<button type="submit" class="nav-link"><i class="fa-solid fa-arrow-right-from-bracket" aria-hidden="true"></i>Log Out</button></form></nav>';
-    } elseif ($liveMonitor) {
-        $needsInstall = system_status()['unbound'] !== 'active';
-        $destination = $needsInstall ? '/wizard' : '/settings';
-        $label = $needsInstall ? 'Install Wizard' : 'Setting';
-        $icon = $needsInstall ? 'fa-wand-magic-sparkles' : 'fa-sliders';
-        echo '<nav class="floating-nav panel" aria-label="Navigasi monitoring"><a id="main-action" class="nav-link" href="' . $destination . '"><i class="fa-solid ' . $icon . '" aria-hidden="true"></i><span id="main-action-text">' . $label . '</span></a></nav>';
     }
     echo '<main class="mx-auto w-full max-w-7xl px-5 py-8 sm:px-8">';
     echo '<header class="mb-8 flex flex-wrap items-center justify-between gap-4"><div><p class="text-xs font-semibold uppercase tracking-[.24em] text-cyan-300">DNS Operations</p><h1 class="mt-2 text-2xl font-semibold tracking-tight">' . e($title) . '</h1></div>';
-    if ($admin && admin_logged_in()) {
-        echo '<a class="btn-secondary" href="/">Live Monitor</a>';
-    }
     echo '</header>';
     if ($admin && $unboundSection) {
         echo '<nav class="mb-5 flex flex-wrap gap-2" aria-label="Pengaturan Unbound">';

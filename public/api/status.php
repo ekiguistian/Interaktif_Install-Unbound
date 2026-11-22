@@ -1,51 +1,53 @@
 <?php
 declare(strict_types=1);
 require_once __DIR__ . '/../../app/functions.php';
-header('Cache-Control: no-store, max-age=0');
-if (in_array($_SERVER['REMOTE_ADDR'] ?? '', ['127.0.0.1', '::1'], true)) {
-    $revisionFile = APP_ROOT . '/revision';
-    $revision = is_readable($revisionFile) ? trim((string)file_get_contents($revisionFile)) : '';
-    if (preg_match('/^[a-f0-9]{40}$/D', $revision)) {
-        header('X-Unbound-Web-Revision: ' . $revision);
-    }
-}
+require_admin(true);
+header('Cache-Control: no-store');
+session_write_close();
 
 try {
-    $rows = db()->query('SELECT recorded_at,total_queries,total_replies,cache_hits,cache_hit_ratio,qps,rx_bytes,tx_bytes,query_types_json,response_codes_json,recursion_avg_ms,cpu_percent,load_1m,load_5m,load_15m,memory_used_mb,memory_total_mb,disk_used_gb,disk_total_gb,uptime_seconds FROM metrics WHERE recorded_at >= NOW() - INTERVAL 1 HOUR ORDER BY recorded_at DESC LIMIT 60')->fetchAll();
-    $rows = array_reverse($rows);
+    $rows = db()->query('SELECT *, UNIX_TIMESTAMP(recorded_at) AS epoch FROM metrics WHERE recorded_at >= NOW() - INTERVAL 1 HOUR ORDER BY id DESC LIMIT 61')->fetchAll();
     $history = [];
     $previous = null;
-    foreach ($rows as $row) {
-        $time = strtotime((string)$row['recorded_at']);
-        $seconds = $previous === null ? 60 : max(1, $time - $previous['time']);
-        $rx = $previous === null ? 0 : max(0, ((int)$row['rx_bytes'] - (int)$previous['rx']) / $seconds);
-        $tx = $previous === null ? 0 : max(0, ((int)$row['tx_bytes'] - (int)$previous['tx']) / $seconds);
-        $history[] = [
-            'recorded_at' => $row['recorded_at'],
-            'total_queries' => (int)$row['total_queries'],
-            'total_replies' => (int)$row['total_replies'],
-            'cache_hits' => (int)$row['cache_hits'],
-            'cache_hit_ratio' => (float)$row['cache_hit_ratio'],
-            'qps' => (float)$row['qps'],
-            'query_types' => json_decode((string)($row['query_types_json'] ?? '{}'), true) ?: [],
-            'response_codes' => json_decode((string)($row['response_codes_json'] ?? '{}'), true) ?: [],
-            'recursion_avg_ms' => (float)$row['recursion_avg_ms'],
-            'cpu_percent' => (float)$row['cpu_percent'],
-            'load_1m' => (float)$row['load_1m'],
-            'load_5m' => (float)$row['load_5m'],
-            'load_15m' => (float)$row['load_15m'],
-            'memory_used_mb' => (int)$row['memory_used_mb'],
-            'memory_total_mb' => (int)$row['memory_total_mb'],
-            'disk_used_gb' => (float)$row['disk_used_gb'],
-            'disk_total_gb' => (float)$row['disk_total_gb'],
-            'uptime_seconds' => (int)$row['uptime_seconds'],
-            'rx_bps' => round($rx, 2),
-            'tx_bps' => round($tx, 2),
+    foreach (array_reverse($rows) as $row) {
+        $sample = json_decode((string)($row['sample_json'] ?? ''), true);
+        // Historical rows contain counters for the installer-selected interface only.
+        $networkSample = $sample ?? [
+            'interfaces' => [app_env('NET_INTERFACE', 'eth0') => [
+                'rx' => (int)$row['rx_bytes'], 'tx' => (int)$row['tx_bytes'],
+            ]],
+            'boot' => null,
         ];
-        $previous = ['time' => $time, 'rx' => (int)$row['rx_bytes'], 'tx' => (int)$row['tx_bytes']];
+        $elapsed = (int)$row['epoch'] - ($previous['epoch'] ?? 0);
+        $network = [];
+        foreach ($networkSample['interfaces'] as $name => $counters) {
+            foreach (['rx', 'tx'] as $direction) {
+                $last = $previous['interfaces'][$name][$direction] ?? null;
+                $network[$name][$direction] = $last !== null && $elapsed > 0
+                    && $networkSample['boot'] === $previous['boot'] && (int)$row['uptime_seconds'] >= $previous['uptime']
+                    && $counters[$direction] >= $last
+                    ? ($counters[$direction] - $last) * 8 / $elapsed : null;
+            }
+        }
+        $previous = $networkSample + ['epoch' => (int)$row['epoch'], 'uptime' => (int)$row['uptime_seconds']];
+        unset($row['sample_json']);
+        $row['network'] = $network;
+        $row['qps'] = $sample === null ? $row['qps'] : $sample['qps'];
+        $row = ($sample['system'] ?? []) + $row;
+        if ($sample !== null && !$sample['dns']) {
+            foreach (['total_queries','total_replies','cache_hits','cache_hit_ratio','recursion_avg_ms'] as $key) $row[$key] = null;
+        }
+        $row['query_types'] = json_decode((string)$row['query_types_json'], true);
+        $row['response_codes'] = json_decode((string)$row['response_codes_json'], true);
+        $history[] = $row;
     }
-    json_response(['ok' => true, 'services' => system_status(), 'latest' => $history ? end($history) : null, 'history' => $history]);
+    $os = is_readable('/etc/os-release') ? parse_ini_file('/etc/os-release', false, INI_SCANNER_RAW) : [];
+    json_response([
+        'ok' => true, 'history' => array_slice($history, -60), 'services' => system_status(),
+        'host' => gethostname(), 'kernel' => php_uname('r'), 'os' => $os['PRETTY_NAME'] ?? 'Linux',
+        'interface' => app_env('NET_INTERFACE'), 'now' => time(),
+    ]);
 } catch (Throwable $error) {
-    error_log('Unbound Web status API: ' . $error->getMessage());
-    json_response(['ok' => false, 'message' => 'Database atau worker metrik belum siap.'], 503);
+    error_log('Unbound Web metrics: ' . $error->getMessage());
+    json_response(['ok'=>false, 'message'=>'Riwayat metrik belum dapat dibaca.'], 503);
 }

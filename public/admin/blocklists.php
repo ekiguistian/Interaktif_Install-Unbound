@@ -4,7 +4,8 @@ require_once __DIR__ . '/../../app/layout.php';
 require_admin();
 $sources=db()->query('SELECT id,name,url,is_active,domain_count,last_updated,last_error FROM blocklists ORDER BY id DESC')->fetchAll();
 $whitelist=db()->query('SELECT id,domain,note,created_at FROM whitelists ORDER BY domain')->fetchAll();
-$schedule=setting('blocklist_schedule','daily');
+$state = manage(['filters-state']);
+$flags = $state['code'] === 0 ? json_decode($state['output'], true) : null;
 page_start('Blocklist & whitelist',true);
 ?>
 <div class="grid gap-5 xl:grid-cols-2">
@@ -31,6 +32,11 @@ page_start('Blocklist & whitelist',true);
     <form data-stream="blocklist-sync" data-output="#blocklist-output"><button class="btn-primary" type="submit"><i class="fa-solid fa-cloud-arrow-down"></i>Update & Apply Now</button></form>
   </div>
   <pre id="blocklist-output" class="mt-4 max-h-72 overflow-auto rounded-xl border border-slate-700 bg-black/50 p-4 font-mono text-xs leading-6 text-emerald-200">Siap menjalankan sinkronisasi.</pre>
-  <form class="mt-5 flex flex-wrap items-end gap-3" data-api="schedule-save"><label class="block min-w-56"><span class="mb-2 block text-sm">Jadwal blocklist</span><select class="form-select" name="schedule"><option value="disabled" <?=$schedule==='disabled'?'selected':''?>>Nonaktif</option><option value="daily" <?=$schedule==='daily'?'selected':''?>>Harian</option><option value="weekly" <?=$schedule==='weekly'?'selected':''?>>Mingguan</option><option value="12h" <?=$schedule==='12h'?'selected':''?>>Setiap 12 jam</option><option value="6h" <?=$schedule==='6h'?'selected':''?>>Setiap 6 jam</option></select></label><button class="btn-secondary" type="submit"><i class="fa-solid fa-calendar-check"></i>Simpan jadwal</button><p data-result class="text-sm text-cyan-200"></p></form>
+  <?php if ($flags === null) { notice($state['output'], 'error'); } else { ?>
+  <form class="mt-5 flex flex-wrap items-center gap-4" data-api="filters-save">
+    <label><input type="checkbox" name="block" <?= $flags['block'] ? 'checked' : '' ?>> Aktifkan blocklist</label>
+    <label><input type="checkbox" name="white" <?= $flags['white'] ? 'checked' : '' ?>> Aktifkan whitelist</label>
+    <button class="btn-secondary" type="submit">Terapkan &amp; perbarui cron</button><p data-result role="status"></p>
+  </form><?php } ?>
 </section>
 <?php page_end(); ?>

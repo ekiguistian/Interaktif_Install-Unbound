@@ -32,13 +32,14 @@ $ruleFields = static function (array $rule): void { ?>
     <label>
       <span class="mb-2 block text-sm font-medium">Protokol</span>
       <select name="protocol" class="form-select">
-        <option value="tcp" <?= $rule['protocol'] === 'tcp' ? 'selected' : '' ?>>TCP</option>
-        <option value="udp" <?= $rule['protocol'] === 'udp' ? 'selected' : '' ?>>UDP</option>
+        <?php foreach (FIREWALL_PROTOCOLS as $proto): ?>
+        <option value="<?=e($proto)?>" <?=$rule['protocol'] === $proto ? 'selected' : ''?>><?=e($proto === 'any' ? 'Semua protokol' : strtoupper($proto))?></option>
+        <?php endforeach; ?>
       </select>
     </label>
     <label>
-      <span class="mb-2 block text-sm font-medium">Port tujuan</span>
-      <input class="form-input" name="port" type="number" min="1" max="65535" value="<?= e($rule['port']) ?>" required>
+      <span class="mb-2 block text-sm font-medium">Port tujuan (opsional)</span>
+      <input class="form-input" name="port" type="number" min="1" max="65535" value="<?= e($rule['port']) ?>">
     </label>
   </div>
   <div class="mt-4">
@@ -64,7 +65,7 @@ page_start('Firewall UFW', true);
             <?= !$firewall || $firewall['active'] === ($action === 'enable') ? 'disabled' : '' ?>><?= e($label) ?></button>
         </form>
       <?php endforeach; ?>
-      <a class="btn-secondary" href="/settings/firewall?direction=<?= e($direction) ?>">Muat ulang</a>
+      <form data-api="firewall-reload"><button type="submit" class="btn-secondary">Reload UFW</button></form>
     </div>
   </nav>
   <p data-page-result role="status" class="mt-2 text-sm text-cyan-200"></p>
@@ -108,7 +109,7 @@ page_start('Firewall UFW', true);
             <details>
               <summary class="cursor-pointer break-words text-sm">
                 <span class="<?= $rule['action'] === 'allow' ? 'text-emerald-300' : 'text-rose-300' ?>"><?= e(strtoupper($rule['action'])) ?></span>
-                <?= e(strtoupper($rule['direction'])) ?> · <?= e($rule['port']) ?>/<?= e(strtoupper($rule['protocol'])) ?>
+                <?= e(strtoupper($rule['direction'])) ?> · <?= $rule['port'] !== '' ? e($rule['port']) . '/' : '' ?><?= e(strtoupper($rule['protocol'])) ?>
                 <span class="text-slate-400">· <?= e($rule['peer'] ?: 'Semua alamat') ?></span>
                 <span class="ml-2 text-cyan-200">Ubah / Hapus</span>
               </summary>

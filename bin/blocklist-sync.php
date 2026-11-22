@@ -39,9 +39,12 @@ function parse_blocklist_line(string $line): ?string
 $tempFiles = [];
 $syncFailed = false;
 try {
+    if ($argc !== 3 || !in_array($argv[1], ['0','1'], true) || !in_array($argv[2], ['0','1'], true)) {
+        throw new RuntimeException('Status filter tidak valid.');
+    }
     $pdo = db();
-    $sources = $pdo->query('SELECT id,name,url FROM blocklists WHERE is_active=1 ORDER BY id')->fetchAll();
-    $whitelistRows = $pdo->query('SELECT domain FROM whitelists')->fetchAll();
+    $sources = $argv[1] === '0' ? [] : $pdo->query('SELECT id,name,url FROM blocklists WHERE is_active=1 ORDER BY id')->fetchAll();
+    $whitelistRows = $argv[2] === '0' ? [] : $pdo->query('SELECT domain FROM whitelists')->fetchAll();
     $whitelist = [];
     foreach ($whitelistRows as $row) {
         $domain = strtolower(rtrim((string)$row['domain'], '.'));
@@ -71,7 +74,7 @@ try {
             }
         }
         $pinnedAddress = $resolved[0];
-        $download = tempnam('/var/lib/unbound-web', 'blocklist-');
+        $download = tempnam('/etc/unbound-web', 'blocklist-');
         if ($download === false) {
             throw new RuntimeException('File sementara blocklist tidak dapat dibuat.');
         }
@@ -123,6 +126,10 @@ try {
     if (!is_dir($confDir) || !is_file('/etc/unbound/unbound.conf')) {
         throw new RuntimeException('Unbound belum dipasang atau konfigurasi dasarnya belum tersedia.');
     }
+    if ($argv[1] === '0' && $argv[2] === '0' && !file_exists($confPath)) {
+        echo "Filter sudah nonaktif.\n";
+        return;
+    }
     $newConf = tempnam($confDir, '.blocklist-');
     if ($newConf === false) {
         throw new RuntimeException('File konfigurasi blocklist sementara tidak dapat dibuat.');
@@ -132,6 +139,16 @@ try {
     fwrite($handle, "server:\n");
     foreach (array_keys($blocked) as $domain) {
         fwrite($handle, '    local-zone: "' . $domain . '." always_nxdomain' . "\n");
+    }
+    foreach ($whitelist as $allowed) {
+        $parent = $allowed;
+        while (($dot = strpos($parent, '.')) !== false) {
+            $parent = substr($parent, $dot + 1);
+            if (isset($blocked[$parent])) {
+                fwrite($handle, '    local-zone: "' . $allowed . '." transparent' . "\n");
+                break;
+            }
+        }
     }
     fclose($handle);
     chmod($newConf, 0640);
@@ -143,13 +160,13 @@ try {
         throw new RuntimeException('unbound-checkconf menolak blocklist: ' . trim($check['output']));
     }
     $old = is_file($confPath) ? file_get_contents($confPath) : null;
-    if (!rename($newConf, $confPath)) {
-        throw new RuntimeException('File blocklist tidak dapat dipasang.');
+    if ($argv[1] === '0' && $argv[2] === '0') {
+        if (!unlink($confPath)) throw new RuntimeException('Gagal melepas file filter.');
+    } else {
+        chgrp($newConf, 'unbound');
+        chmod($newConf, 0640);
+        if (!rename($newConf, $confPath)) throw new RuntimeException('File blocklist tidak dapat dipasang.');
     }
-    $tempFiles = array_values(array_filter($tempFiles, static fn(string $path): bool => $path !== $newConf));
-    chown($confPath, 'root');
-    chgrp($confPath, 'unbound');
-    chmod($confPath, 0640);
     $mainCheck = CommandRunner::run(['/usr/sbin/unbound-checkconf', '/etc/unbound/unbound.conf'], 10);
     if ($mainCheck['code'] !== 0) {
         if ($old === null) {
@@ -161,6 +178,15 @@ try {
             chmod($confPath, 0640);
         }
         throw new RuntimeException('Konfigurasi aktif tidak lolos validasi. Blocklist sebelumnya dipulihkan.');
+    }
+    if ($blocked) {
+        $zones = CommandRunner::run(['/usr/sbin/unbound-checkconf','-o','local-zone','/etc/unbound/unbound.conf'], 20);
+        $sample = array_key_first($blocked);
+        if ($zones['code'] !== 0 || !preg_match('/^"?'.preg_quote($sample,'/').'\.?"?\s+always_nxdomain$/m', $zones['output'])) {
+            if ($old === null) unlink($confPath);
+            else file_put_contents($confPath, $old, LOCK_EX);
+            throw new RuntimeException('File filter belum terbaca. Periksa include /etc/unbound/unbound.conf.d/*.conf di konfigurasi aktif.');
+        }
     }
     $reload = CommandRunner::run(['/usr/bin/systemctl','reload','unbound'], 30);
     if ($reload['code'] !== 0) {

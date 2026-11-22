@@ -13,15 +13,18 @@ final class CommandRunner
     }
 
     /** @param list<string> $argv @return array{code:int,output:string} */
-    public static function run(array $argv, int $timeout = 10): array
+    public static function run(array $argv, int $timeout = 10, ?string $input = null): array
     {
         $command = self::command($argv);
-        $descriptor = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['redirect', 1]];
+        $stdin = tmpfile();
+        if ($stdin === false) throw new RuntimeException('Gagal membuka input proses.');
+        if ($input !== null) { fwrite($stdin, $input); rewind($stdin); }
+        $descriptor = [0 => $stdin, 1 => ['pipe', 'w'], 2 => ['redirect', 1]];
         $process = proc_open($command . ' 2>&1', $descriptor, $pipes, null, ['PATH' => '/usr/sbin:/usr/bin:/sbin:/bin']);
         if (!is_resource($process)) {
             return ['code' => 127, 'output' => 'Perintah sistem tidak dapat dijalankan.'];
         }
-        fclose($pipes[0]);
+        fclose($stdin);
         stream_set_blocking($pipes[1], false);
         $output = '';
         $started = time();

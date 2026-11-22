@@ -123,14 +123,6 @@ function valid_public_https_url(string $url): bool
     return true;
 }
 
-function setting(string $key, string $default = ''): string
-{
-    $statement = db()->prepare('SELECT setting_value FROM app_settings WHERE setting_key = ?');
-    $statement->execute([$key]);
-    $value = $statement->fetchColumn();
-    return $value === false ? $default : (string)$value;
-}
-
 function system_status(): array
 {
     $cacheFile = '/var/lib/unbound-web/system-status.json';
@@ -140,6 +132,11 @@ function system_status(): array
             return $cached;
         }
     }
+    return read_service_status();
+}
+
+function read_service_status(): array
+{
     $result = CommandRunner::run(['/usr/bin/sudo', '-n', '/usr/local/sbin/unbound-web-manage', 'service-status']);
     if ($result['code'] !== 0) {
         return ['unbound' => 'unknown', 'unbound_version' => '', 'zabbix' => 'unknown', 'error' => 'Status service belum dapat dibaca.'];
@@ -155,23 +152,6 @@ function system_status(): array
     return $status;
 }
 
-function refresh_system_status_cache(): void
-{
-    $result = CommandRunner::run(['/usr/bin/sudo','-n','/usr/local/sbin/unbound-web-manage','service-status']);
-    if ($result['code'] !== 0) return;
-    $status = ['unbound'=>'unknown','unbound_version'=>'','zabbix'=>'unknown'];
-    foreach (preg_split('/\R/', trim($result['output'])) as $line) {
-        if (preg_match('/^(unbound|zabbix)=([a-z-]+)$/',$line,$match)) {
-            $status[$match[1]]=$match[2];
-        } elseif (preg_match('/^unbound_version=([0-9.]+)$/',$line,$match)) {
-            $status['unbound_version']=$match[1];
-        }
-    }
-    $path='/var/lib/unbound-web/system-status.json';
-    $temp=$path . '.' . getmypid() . '.tmp';
-    if (file_put_contents($temp,json_encode($status,JSON_UNESCAPED_SLASHES),LOCK_EX)!==false) rename($temp,$path);
-}
-
 function client_ip(): string
 {
     return substr((string)($_SERVER['REMOTE_ADDR'] ?? 'unknown'), 0, 45);
@@ -180,4 +160,11 @@ function client_ip(): string
 function fail_validation(string $message): never
 {
     json_response(['ok' => false, 'message' => $message], 422);
+}
+
+const FIREWALL_PROTOCOLS = ['any', 'tcp-udp', 'tcp', 'udp', 'icmp', 'esp', 'ah', 'gre', 'igmp', 'vrrp'];
+
+function manage(array $args, ?string $input = null, int $timeout = 45): array
+{
+    return CommandRunner::run(['/usr/bin/sudo', '-n', '/usr/local/sbin/unbound-web-manage', ...$args], $timeout, $input);
 }

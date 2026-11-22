@@ -12,7 +12,6 @@ if (preg_match('~\.php$~i', $path)) {
     $clean = substr($path, 0, -4);
     $aliases = [
         '/index' => '/',
-        '/setup' => '/wizard',
         '/admin' => '/settings',
         '/admin/index' => '/settings',
         '/admin/unbound' => '/settings/unbound',
@@ -33,8 +32,6 @@ if (preg_match('~\.php$~i', $path)) {
 
 $routes = [
     '/' => __DIR__ . '/pages/dashboard.php',
-    '/wizard' => __DIR__ . '/setup.php',
-    '/setup' => __DIR__ . '/setup.php',
     '/login' => __DIR__ . '/login.php',
     '/logout' => __DIR__ . '/logout.php',
     '/settings' => __DIR__ . '/admin/index.php',

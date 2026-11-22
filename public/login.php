@@ -3,7 +3,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/../app/layout.php';
 
 if (admin_logged_in()) {
-    header('Location: /settings');
+    header('Location: /');
     exit;
 }
 $message = '';
@@ -27,9 +27,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 session_regenerate_id(true);
                 $_SESSION['admin_user'] = $expectedUser;
                 db()->prepare('DELETE FROM login_attempts WHERE remote_addr = ?')->execute([client_ip()]);
-                $next = (string)($_POST['next'] ?? '/settings');
-                if (!str_starts_with($next, '/settings') && $next !== '/wizard') {
-                    $next = '/settings';
+                $next = (string)($_POST['next'] ?? '/');
+                if (!preg_match('~^/(?:settings(?:/[a-z]+)?)?$~D', $next)) {
+                    $next = '/';
                 }
                 header('Location: ' . $next);
                 exit;
@@ -42,17 +42,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 }
-$next = (string)($_GET['next'] ?? $_POST['next'] ?? '/settings');
-if (!str_starts_with($next, '/settings') && $next !== '/wizard') {
-    $next = '/settings';
+$next = (string)($_GET['next'] ?? $_POST['next'] ?? '/');
+if (!preg_match('~^/(?:settings(?:/[a-z]+)?)?$~D', $next)) {
+    $next = '/';
 }
 page_start('Login admin');
 ?>
 <div class="mx-auto max-w-md">
   <section class="panel p-6 sm:p-8">
     <div class="mb-6 grid h-12 w-12 place-items-center rounded-2xl bg-cyan-400/10 text-xl text-cyan-300"><i class="fa-solid fa-lock"></i></div>
-    <h2 class="text-xl font-semibold">Masuk ke Settings</h2>
-    <p class="mt-2 text-sm leading-6 text-slate-400">Kredensial dibaca dari file <code>/etc/unbound-web/.env</code>. Ubah username atau password hanya melalui file tersebut.</p>
+    <h2 class="text-xl font-semibold">Masuk ke panel Unbound</h2>
+    <p class="mt-2 text-sm leading-6 text-slate-400">Gunakan akun admin untuk membuka monitor dan kontrol server.</p>
     <?php if ($message !== ''): ?><div class="mt-5 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-200"><?= e($message) ?></div><?php endif; ?>
     <form method="post" class="mt-6 space-y-4">
       <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>"><input type="hidden" name="next" value="<?= e($next) ?>">
@@ -60,7 +60,7 @@ page_start('Login admin');
       <label class="block"><span class="mb-2 block text-sm">Password</span><input class="form-input" type="password" name="password" autocomplete="current-password" required></label>
       <button class="btn-primary w-full" type="submit"><i class="fa-solid fa-arrow-right-to-bracket"></i>Masuk</button>
     </form>
-    <p class="mt-5 text-xs leading-5 text-slate-500">Percobaan login dibatasi. Tidak ada menu untuk mengganti kredensial melalui web.</p>
+    <p class="mt-5 text-xs leading-5 text-slate-500">Setelah delapan percobaan gagal, coba lagi dalam 15 menit.</p>
   </section>
 </div>
 <?php page_end(); ?>

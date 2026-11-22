@@ -15,3 +15,10 @@ body { background-image: radial-gradient(ellipse at 18% 0%, rgba(8,145,178,.11),
 .btn-danger { display:inline-flex; align-items:center; gap:.45rem; border:1px solid rgb(244 63 94 / .35); border-radius:.65rem; padding:.45rem .7rem; color:#fda4af; font-size:.8rem; }
 .kpi { min-height:135px; }
 pre { white-space:pre-wrap; overflow-wrap:anywhere; }
+
+.host-strip,.chart-heading{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap}
+.host-strip{padding:1.25rem 1.5rem;margin-bottom:1rem;border-left:3px solid #2dd4bf}
+.host-strip span,.host-strip p,.detail-grid dt{display:block;color:#94a3b8;font-size:.82rem}
+.host-strip strong{display:block;font-weight:600}.monitor-grid,.detail-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:1rem}
+.telemetry{padding:1.15rem;min-width:0}.telemetry h2{color:#cbd5e1}.telemetry>strong{display:block;margin:.4rem 0;font-size:1.5rem;font-variant-numeric:tabular-nums}
+.plot{height:145px}.wide-chart{grid-column:1/-1}.chart-heading select{width:auto}.detail-grid{margin-top:1rem}.detail-grid dd{margin-top:.3rem}

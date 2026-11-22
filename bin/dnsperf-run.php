@@ -31,10 +31,12 @@ function streamDnsperf(array $argv): int
     }
     fclose($pipes[0]);
     stream_set_blocking($pipes[1], false);
+    $summary = '';
     $status = ['exitcode' => 1, 'running' => true];
     while (true) {
         $chunk = stream_get_contents($pipes[1]);
         if ($chunk !== false && $chunk !== '') {
+            $summary = substr($summary . $chunk, -16384);
             echo $chunk;
             flush();
         }
@@ -46,8 +48,17 @@ function streamDnsperf(array $argv): int
     }
     $remaining = stream_get_contents($pipes[1]);
     if ($remaining !== false && $remaining !== '') {
+        $summary .= $remaining;
         echo $remaining;
         flush();
+    }
+    if (preg_match('/Queries sent:\s+(\d+)/i', $summary, $sent)
+        && preg_match('/Queries completed:\s+(\d+)/i', $summary, $completed)
+        && preg_match('/Queries per second:\s+([\d.]+)/i', $summary, $rate)) {
+        printf("\nTerkirim %s · Terjawab %s · %.2f QPS\n", $sent[1], $completed[1], (float)$rate[1]);
+        if (preg_match('/Average\s+Latency\s+\(s(?:ec)?\):\s+([\d.]+)/i', $summary, $latency)) {
+            printf("Latensi rata-rata %.3f ms\n", (float)$latency[1] * 1000);
+        }
     }
     fclose($pipes[1]);
     $closed = proc_close($process);
