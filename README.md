@@ -14,12 +14,20 @@ Pada 22 November 2026, rilis terbaru yang tercatat adalah Ubuntu 26.10, Ubuntu 2
 
 ## Menjalankan installer
 
-Login sebagai `root`. Perbarui APT dan pasang Git agar repository dapat di-clone:
+Pada instalasi Debian yang belum memiliki `sudo`, login sebagai `root`. Perbarui APT dan pasang paket persiapan berikut:
 
 ```bash
 apt-get update
-apt-get install -y git ca-certificates curl
+apt-get install -y sudo git ca-certificates curl
 ```
+
+Jika ingin melanjutkan sebagai pengguna biasa, tambahkan akun tersebut ke grup `sudo`, lalu logout dan login kembali. Ganti `NAMA_USER` dengan nama akun Linux:
+
+```bash
+usermod -aG sudo NAMA_USER
+```
+
+Jika tetap bekerja sebagai `root`, langkah ini tidak diperlukan.
 
 Clone repository, lalu jalankan installer:
 
@@ -30,7 +38,7 @@ chmod +x instalasi-unbound-interaktif.sh
 ./instalasi-unbound-interaktif.sh
 ```
 
-Jika memakai akun biasa, tambahkan `sudo` pada dua perintah APT saja. Jalankan `git clone` dan installer sebagai akun tersebut dengan hak sudo. Installer akan kembali menjalankan `apt-get update`, lalu memeriksa dan memasang dependensi sistem yang belum tersedia. Jika `sudo` belum terpasang, jalankan installer sebagai `root`.
+Jalankan `git clone` dan installer sebagai akun yang memiliki hak sudo, atau lanjutkan sebagai `root`. Installer akan kembali menjalankan `apt-get update`, lalu memeriksa dan memasang dependensi sistem yang belum tersedia.
 
 ## Alur installer
 
