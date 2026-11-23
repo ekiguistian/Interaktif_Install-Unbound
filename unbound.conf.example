@@ -1,0 +1,116 @@
+server:
+    # GENERAL
+    verbosity: 0
+    num-threads: 4
+
+    # NETWORK - Isi sesuai ip interface Server
+    interface: 127.0.0.1
+    interface: 10.10.10.10
+    port: 53
+
+    # PROTOCOL
+    do-ip4: yes
+    do-ip6: no
+    prefer-ip6: no
+    do-udp: yes
+    do-tcp: yes
+
+    # ACCESS CONTROL
+    access-control: 127.0.0.0/8 allow
+    access-control: 0.0.0.0/0 allow
+
+    # THREAD & SOCKET
+    so-reuseport: yes
+    so-rcvbuf: 4m
+    so-sndbuf: 4m
+
+    # MEMORY CACHE
+    msg-cache-size: 512m
+    rrset-cache-size: 1536m
+    key-cache-size: 128m
+
+    # CACHE SLABS
+    msg-cache-slabs: 4
+    rrset-cache-slabs: 4
+    infra-cache-slabs: 4
+    key-cache-slabs: 4
+
+    # CACHE TTL
+    cache-min-ttl: 60
+    cache-max-ttl: 86400
+
+    # PREFETCH
+    prefetch: yes
+    prefetch-key: yes
+
+    # QUERY PERFORMANCE
+    outgoing-range: 960
+    num-queries-per-thread: 512
+    infra-cache-numhosts: 50000
+    jostle-timeout: 2000
+
+    # SERVE EXPIRED
+    serve-expired: yes
+    serve-expired-ttl: 86400
+    serve-expired-reply-ttl: 30
+
+    # DNS OPTIMIZATION
+    edns-buffer-size: 1232
+    minimal-responses: yes
+    rrset-roundrobin: yes
+    qname-minimisation: yes
+    qname-minimisation-strict: no
+
+    # DNSSEC SECURITY
+    harden-dnssec-stripped: yes
+    harden-glue: yes
+    hide-identity: yes
+    hide-version: yes
+
+    # REVERSE DNS
+    local-zone: "10.10.10.in-addr.arpa." static
+    local-data: "10.10.10.10.in-addr.arpa. IN PTR ns1.nexan.id."
+
+    # ROOT HINTS & TRUST ANCHOR
+    # root-hints: "/var/lib/unbound/root.hints"
+    # auto-trust-anchor-file: "/var/lib/unbound/root.key"
+
+    # LOGGING
+    use-syslog: yes
+    log-queries: yes
+    log-replies: yes
+    log-tag-queryreply: yes
+
+    # BLOCKLIST
+    include: "/etc/unbound/blocklist/blocklist.conf"
+
+
+# FORWARD DNS
+forward-zone:
+    name: "."
+    forward-first: yes
+
+    # CLOUDFLARE
+    forward-addr: 1.1.1.1
+    forward-addr: 1.0.0.1
+
+    # GOOGLE
+    forward-addr: 8.8.8.8
+    forward-addr: 8.8.4.4
+
+    # QUAD9
+    forward-addr: 9.9.9.9
+    forward-addr: 149.112.112.112
+
+
+# REMOTE CONTROL
+remote-control:
+    control-enable: yes
+    control-interface: 127.0.0.1
+    control-use-cert: yes
+
+    # Certifiace DNSSEC - Pastikan sudah di buat
+    server-key-file: "/etc/unbound/unbound_server.key"
+    server-cert-file: "/etc/unbound/unbound_server.pem"
+    control-key-file: "/etc/unbound/unbound_control.key"
+    control-cert-file: "/etc/unbound/unbound_control.pem"
