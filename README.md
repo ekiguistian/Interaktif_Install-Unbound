@@ -2,9 +2,23 @@
 
 Panel web untuk memantau resolver Unbound dan mengelola layanan di Ubuntu Server. Dari browser, kamu bisa lihat grafik DNS dan Linux, restart Unbound, edit konfigurasi, serta kelola filter DNS dan firewall.
 
+## Tampilan web app
+
+Login admin untuk membuka monitor dan kontrol server.
+
+![Halaman login Unbound Web Manager](docs/screenshots/login.png)
+
+Dashboard menampilkan status Unbound, QPS, cache hit, latensi rekursi, dan penggunaan CPU.
+
+![Dashboard monitoring Unbound dan CPU](docs/screenshots/monitoring-unbound.png)
+
+Grafik memori, disk, trafik RX/TX, dan ringkasan statistik Linux.
+
+![Monitoring memori, disk, trafik jaringan, dan statistik server](docs/screenshots/monitoring-linux.png)
+
 ## 1. Siapkan server DNS
 
-Gunakan Ubuntu Server dengan akses `sudo`. Cek apakah systemd sudah berjalan sebagai proses utama.
+Panduan ini memakai Ubuntu Server 22.04 LTS (Jammy) dengan akses `sudo`. Jalankan perintah di terminal server. Cek apakah systemd sudah berjalan sebagai proses utama.
 
 ```bash
 ps -p 1 -o comm=
@@ -12,10 +26,20 @@ ps -p 1 -o comm=
 
 Hasilnya harus `systemd`. Kalau pakai Ubuntu di WSL 2 dan systemd belum aktif, tambahkan `systemd=true` di bagian `[boot]` pada `/etc/wsl.conf`. Jalankan `wsl --shutdown` dari PowerShell, buka Ubuntu lagi, lalu ulangi pengecekan. [Panduan systemd di WSL](https://learn.microsoft.com/en-us/windows/wsl/wsl-config#systemd-support)
 
-Kalau Unbound belum terpasang, jalankan ini dari terminal Ubuntu.
+Siapkan paket dasar dan aktifkan repositori `universe`, yang menyediakan dnsperf dan beberapa utilitas server. [Paket dnsperf Ubuntu 22.04](https://packages.ubuntu.com/jammy/dnsperf)
 
 ```bash
-sudo apt update && sudo apt upgrade && sudo apt install curl htop git unbound ufw iftop -y
+sudo apt update &&
+sudo apt install -y ca-certificates software-properties-common &&
+sudo add-apt-repository -y universe &&
+sudo apt update &&
+sudo apt install -y curl htop git ufw iftop
+```
+
+Untuk memperbarui paket sistem, jalankan `sudo apt upgrade`. Kalau Unbound belum terpasang, pasang paketnya sebelum melanjutkan.
+
+```bash
+sudo apt install -y unbound
 ```
 
 Aktifkan layanan Unbound di systemd agar langsung jalan dan otomatis mulai saat server boot. [Referensi systemctl](https://manpages.ubuntu.com/manpages/noble/man1/systemctl.1.html)
@@ -40,20 +64,21 @@ Kalau statistik belum muncul, cek bagian `remote-control` di konfigurasi Unbound
 Jalankan di server Ubuntu yang akan dipantau. Clone branch `main` ke direktori home pengguna.
 
 ```bash
-cd ~ && git clone --branch main https://github.com/ekiguistian/Unbound_DNS_Web-Manager.git
+cd ~ &&
+git clone --branch main https://github.com/ekiguistian/Unbound_DNS_Web-Manager.git &&
+cd Unbound_DNS_Web-Manager &&
+sudo bash ./install.sh
 ```
 
-Masuk ke folder hasil clone, ambil versi terbaru dari `main`, lalu jalankan installer.
+Kalau folder hasil clone sudah ada, gunakan langkah update di bagian berikutnya. Pada pemasangan pertama, installer otomatis memakai IPv4 server. Untuk memakai nama DNS atau IPv4 tertentu, jalankan installer dari folder proyek dengan perintah berikut. Ganti `10.10.10.10` dengan alamat server yang bisa diakses dari browser.
 
 ```bash
-cd ~/Unbound_DNS_Web-Manager &&
-git pull --ff-only origin main &&
-sudo WEB_HOST=dns-panel.example.net bash install.sh
+sudo env WEB_HOST=10.10.10.10 bash ./install.sh
 ```
 
-Ganti `dns-panel.example.net` dengan nama DNS atau IP server. Kalau `WEB_HOST` dikosongkan, installer mengambil alamat pertama dari `hostname -I`.
+Kamu juga bisa mengisi `WEB_HOST` dengan nama DNS yang mengarah ke server. Alamat panel disimpan untuk pemasangan berikutnya di `/etc/unbound-web/web-host`.
 
-Installer menyiapkan MySQL, PHP 8.4-FPM, Nginx, cron, dan dnsperf. Jika PHP 8.4 belum ada di repositori aktif, installer menambahkan PPA `ondrej/php`. Aplikasi dipasang ke `/opt/www/unbound-web/` dan kredensial disimpan di `/etc/unbound-web/.env`.
+Installer menyiapkan MySQL 8, PHP 8.4-FPM, Nginx, cron, dan dnsperf. Installer mengaktifkan `universe` dan menambahkan PPA `ondrej/php` jika paket PHP 8.4 belum tersedia. Aplikasi dipasang ke `/opt/www/unbound-web/` dan kredensial disimpan di `/etc/unbound-web/.env`.
 
 Setelah migrasi database, installer menjalankan `nginx -t`, mengecek halaman login HTTPS, lalu menampilkan URL, username, dan password. Password login baru terdiri dari 8 karakter acak dengan 1 huruf kapital, 1 simbol, dan 6 huruf kecil. Installer memakai kredensial yang sudah ada saat dijalankan ulang.
 
@@ -89,13 +114,13 @@ Gunakan folder hasil clone di `~/Unbound_DNS_Web-Manager`. Sebelum update, cadan
 cd ~/Unbound_DNS_Web-Manager && git status --short
 ```
 
-Jika ada file yang berubah, simpan perubahan itu lewat commit atau stash sebelum melanjutkan. Setelah folder kerja bersih, jalankan rangkaian berikut. Ganti `WEB_HOST` dengan nama DNS atau IP yang dipakai panel saat ini.
+Jika ada file yang berubah, simpan perubahan itu lewat commit atau stash sebelum melanjutkan. Setelah folder kerja bersih, jalankan rangkaian berikut. Installer menggunakan alamat panel yang tersimpan atau membaca nama server dari konfigurasi Nginx milik panel versi sebelumnya.
 
 ```bash
 cd ~/Unbound_DNS_Web-Manager &&
 git switch main &&
 git pull --ff-only origin main &&
-sudo WEB_HOST=dns-panel.example.net bash install.sh
+sudo bash ./install.sh
 ```
 
 `git pull` memperbarui source di folder clone. Menjalankan kembali `install.sh` menerapkan versi itu ke `/opt/www/unbound-web/`, menjalankan migrasi database yang diperlukan, dan memuat ulang layanan web. Rangkaian berhenti jika salah satu perintah gagal. Kalau Git melaporkan riwayat branch berbeda, selesaikan perbedaan commit sebelum mengulang update.
@@ -162,6 +187,17 @@ flowchart TD
 ```
 
 ## Cek kalau ada masalah
+
+Installer menampilkan tahap dan nomor baris saat sebuah perintah gagal. Lihat pesan tepat sebelum baris tersebut untuk penyebabnya.
+
+| Pesan atau kondisi | Yang perlu dicek |
+|---|---|
+| `apt update` gagal | Periksa URL repository, koneksi DNS, dan kunci repository yang disebut di output APT. Perbaiki source itu lalu ulangi `sudo apt update`. |
+| `Could not get lock` dari APT | Installer menunggu kunci APT hingga 180 detik. Jika masih gagal, tunggu proses update Ubuntu yang sedang berjalan selesai, lalu ulangi installer. |
+| Paket PHP 8.4 belum tersedia | Jalankan `apt-cache policy php8.4-fpm php8.4-cli php8.4-mysql`. Pastikan PPA `ondrej/php` untuk Jammy berhasil ditambahkan. |
+| `Access denied` untuk root MySQL | Jika root MySQL memakai password, simpan aksesnya di `/root/.my.cnf` dengan bagian `[client]`, `user=root`, dan `password=...`. Atur izin file dengan `sudo chmod 600 /root/.my.cnf`. |
+| `502 Bad Gateway` atau socket PHP belum tersedia | Periksa `sudo journalctl -u php8.4-fpm -n 50 --no-pager`. |
+| Panel gagal diakses dari komputer lain | Cek alamat yang dipakai dan akses TCP 443 di firewall server serta jaringan. |
 
 ```bash
 sudo nginx -t
