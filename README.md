@@ -61,6 +61,8 @@ Pembaruan berjalan tanpa meminta email. Setelah migrasi pertama, masuk lagi deng
 
 Di menu **Akun**, ubah username, password, dan email pemulihan. Isi host, port, sender, dan mode SMTP, lalu aktifkan SMTP. Gunakan **STARTTLS** atau **SSL/TLS** untuk SMTP dengan autentikasi. Mode **None** mendukung relay tanpa autentikasi.
 
+Setelah menyimpan konfigurasi, klik **Tes SMTP** untuk mengirim email tes ke alamat pemulihan.
+
 Gunakan **Lupa password** di halaman login dan masukkan email pemulihan yang tersimpan di akun. Masukkan OTP dari email pada browser yang sama dalam 10 menit.
 
 ## Fitur

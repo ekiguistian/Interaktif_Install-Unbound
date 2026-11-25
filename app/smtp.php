@@ -88,13 +88,31 @@ function save_panel_smtp(PDO $pdo, array $form): void
 
 function send_panel_otp(array $delivery, string $key): void
 {
-    $smtp = $delivery['smtp'];
-    $smtp['password'] = $smtp['encrypted_password'] === null ? '' : decrypt_smtp_password($smtp['encrypted_password'], $key);
+    send_panel_mail($delivery['smtp'], $delivery['recipient'], $delivery['otp'], $key);
+}
+
+function send_panel_smtp_test(PDO $pdo): void
+{
+    $recipient = panel_account($pdo)['recovery_email'] ?? '';
+    if (!valid_recovery_email($recipient)) {
+        throw new DomainException('Simpan email pemulihan di profil akun sebelum menjalankan tes.');
+    }
+    $smtp = panel_smtp_settings($pdo);
+    if (!$smtp['enabled']) {
+        throw new DomainException('Aktifkan dan simpan konfigurasi SMTP sebelum menjalankan tes.');
+    }
+    send_panel_mail($smtp, $recipient, null);
+}
+
+function send_panel_mail(array $smtp, string $recipient, ?string $otp, ?string $key = null): void
+{
+    $smtp['password'] = $smtp['encrypted_password'] === null ? ''
+        : decrypt_smtp_password($smtp['encrypted_password'], $key ?? panel_secret_key());
     unset($smtp['encrypted_password']);
-    $payload = json_encode(['smtp' => $smtp, 'recipient' => $delivery['recipient'], 'otp' => $delivery['otp']], JSON_THROW_ON_ERROR);
+    $payload = json_encode(['smtp' => $smtp, 'recipient' => $recipient, 'otp' => $otp], JSON_THROW_ON_ERROR);
     $result = CommandRunner::run(['/usr/bin/python3', '-I', __DIR__ . '/../bin/send-otp.py'], 15, $payload);
     if ($result['code'] !== 0) {
-        throw new RuntimeException('Pengiriman OTP melalui SMTP gagal.');
+        throw new RuntimeException('Pengiriman email melalui SMTP gagal.');
     }
 }
 

@@ -6,11 +6,12 @@ require_admin();
 
 $error = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $action = form_string($_POST, 'action');
     try {
         if (!hash_equals(csrf_token(), form_string($_POST, 'csrf_token'))) {
             throw new DomainException('Sesi formulir berakhir. Muat ulang halaman.');
         }
-        switch (form_string($_POST, 'action')) {
+        switch ($action) {
             case 'account':
                 $version = change_panel_account(db(), $_POST);
                 session_regenerate_id(true);
@@ -22,6 +23,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 save_panel_smtp(db(), $_POST);
                 $_SESSION['account_notice'] = 'Pengaturan SMTP tersimpan.';
                 break;
+            case 'smtp-test':
+                send_panel_smtp_test(db());
+                $_SESSION['account_notice'] = 'Tes SMTP berhasil. Email dikirim ke alamat pemulihan.';
+                break;
             default:
                 throw new DomainException('Aksi tidak tersedia.');
         }
@@ -30,8 +35,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } catch (DomainException $failure) {
         $error = $failure->getMessage();
     } catch (Throwable $failure) {
-        error_log('Unbound Web account: gagal menyimpan pengaturan.');
-        $error = 'Pengaturan gagal disimpan.';
+        if ($action === 'smtp-test') {
+            error_log('Unbound Web SMTP: pengiriman email tes gagal.');
+            $error = 'Tes SMTP gagal. Periksa pengaturan dan koneksi ke server SMTP.';
+        } else {
+            error_log('Unbound Web account: gagal menyimpan pengaturan.');
+            $error = 'Pengaturan gagal disimpan.';
+        }
     }
 }
 $account = panel_account(db());
@@ -64,36 +74,44 @@ if ($error !== '') notice($error, 'error');
     </label>
     <button class="btn-primary" type="submit">Simpan akun</button>
   </form>
-  <form method="post" class="panel p-5 space-y-4">
+  <section class="panel p-5 space-y-4">
     <h2 class="font-semibold">SMTP pemulihan</h2>
-    <input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>">
-    <input type="hidden" name="action" value="smtp">
-    <label class="flex items-center gap-2">
-      <input type="checkbox" role="switch" name="enabled" value="1" <?= $smtp['enabled'] ? 'checked' : '' ?>>
-      Aktifkan SMTP
-    </label>
-    <?php field('Host SMTP', 'host', $smtp['host'], required: false); ?>
-    <label class="block">Keamanan koneksi
-      <select class="form-select" name="encryption">
-        <?php foreach (['starttls' => 'STARTTLS', 'ssl' => 'SSL/TLS', 'none' => 'None'] as $value => $label): ?>
-          <option value="<?=e($value)?>" <?= $smtp['encryption'] === $value ? 'selected' : '' ?>><?=e($label)?></option>
-        <?php endforeach; ?>
-      </select>
-    </label>
-    <label class="block">Port
-      <input class="form-input" name="port" type="number" min="1" max="65535" value="<?=e($smtp['port'])?>" required>
-    </label>
-    <?php field('Username SMTP', 'smtp_username', $smtp['username'], hint: 'Kosongkan untuk relay tanpa autentikasi.', required: false); ?>
-    <?php field('Email sender', 'sender', $smtp['sender'], 'email', required: false); ?>
-    <label class="block">Password SMTP
-      <input class="form-input" name="smtp_password" type="password" autocomplete="new-password" maxlength="512"
-        <?= $smtp['encrypted_password'] !== null ? 'placeholder="Kosongkan untuk memakai password tersimpan"' : '' ?>>
-    </label>
-    <label class="block">Password panel saat ini
-      <input class="form-input" name="current_password" type="password" autocomplete="current-password" required>
-    </label>
-    <button class="btn-primary" type="submit">Simpan SMTP</button>
-  </form>
+    <form method="post" class="space-y-4">
+      <input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>">
+      <input type="hidden" name="action" value="smtp">
+      <label class="flex items-center gap-2">
+        <input type="checkbox" role="switch" name="enabled" value="1" <?= $smtp['enabled'] ? 'checked' : '' ?>>
+        Aktifkan SMTP
+      </label>
+      <?php field('Host SMTP', 'host', $smtp['host'], required: false); ?>
+      <label class="block">Keamanan koneksi
+        <select class="form-select" name="encryption">
+          <?php foreach (['starttls' => 'STARTTLS', 'ssl' => 'SSL/TLS', 'none' => 'None'] as $value => $label): ?>
+            <option value="<?=e($value)?>" <?= $smtp['encryption'] === $value ? 'selected' : '' ?>><?=e($label)?></option>
+          <?php endforeach; ?>
+        </select>
+      </label>
+      <label class="block">Port
+        <input class="form-input" name="port" type="number" min="1" max="65535" value="<?=e($smtp['port'])?>" required>
+      </label>
+      <?php field('Username SMTP', 'smtp_username', $smtp['username'], hint: 'Kosongkan untuk relay tanpa autentikasi.', required: false); ?>
+      <?php field('Email sender', 'sender', $smtp['sender'], 'email', required: false); ?>
+      <label class="block">Password SMTP
+        <input class="form-input" name="smtp_password" type="password" autocomplete="new-password" maxlength="512"
+          <?= $smtp['encrypted_password'] !== null ? 'placeholder="Kosongkan untuk memakai password tersimpan"' : '' ?>>
+      </label>
+      <label class="block">Password panel saat ini
+        <input class="form-input" name="current_password" type="password" autocomplete="current-password" required>
+      </label>
+      <button class="btn-primary" type="submit">Simpan SMTP</button>
+    </form>
+    <form method="post" class="space-y-2">
+      <input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>">
+      <input type="hidden" name="action" value="smtp-test">
+      <button class="btn-secondary" type="submit">Tes SMTP</button>
+      <p class="text-sm">Kirim email tes ke alamat pemulihan dengan konfigurasi yang tersimpan.</p>
+    </form>
+  </section>
 </div>
 <?php page_end(); ?>
 

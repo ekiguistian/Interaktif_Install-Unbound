@@ -1,4 +1,4 @@
-"""Send a panel recovery email using the selected SMTP transport."""
+"""Send a panel recovery or test email using the selected SMTP transport."""
 
 import json
 import smtplib
@@ -11,8 +11,13 @@ def send(smtp, recipient, otp):
     message = EmailMessage()
     message["From"] = smtp["sender"]
     message["To"] = recipient
-    message["Subject"] = "Kode pemulihan Unbound Web Manager"
-    message.set_content(f"Kode pemulihan Anda: {otp}\n\nKode berlaku 10 menit dan hanya dapat dipakai sekali.\n")
+    if otp is None:
+        message["Subject"] = "Tes SMTP Unbound Web Manager berhasil"
+        message.set_content("Selamat! Konfigurasi SMTP Unbound Web Manager berhasil.\n\n"
+                            "Panel berhasil mengirim email ke alamat pemulihan akun Anda.\n")
+    else:
+        message["Subject"] = "Kode pemulihan Unbound Web Manager"
+        message.set_content(f"Kode pemulihan Anda: {otp}\n\nKode berlaku 10 menit dan hanya dapat dipakai sekali.\n")
     mode = smtp["encryption"]
     if mode not in ("ssl", "starttls", "none") or (mode == "none" and smtp["username"]):
         raise ValueError("Mode SMTP tidak valid.")
@@ -31,6 +36,6 @@ if __name__ == "__main__":
     try:
         send(**json.load(sys.stdin))
     except (OSError, ValueError, smtplib.SMTPException):
-        sys.exit("Pengiriman OTP gagal.")
+        sys.exit("Pengiriman email gagal.")
 
 # System ini di buat dan hasil ide oleh Eki Guistian, Anda boleh memakai dan memdifikasi dengan syarat tetap membuka code ke public dan mencatumkan sumber dari Eki guistian. sesuai aturan opensource
