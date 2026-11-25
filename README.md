@@ -4,9 +4,9 @@ Panel HTTPS untuk monitor dan kontrol Unbound di Ubuntu Server 22.04 LTS. Login 
 
 ## Dependensi
 
-- **Server**: Ubuntu 22.04 LTS, systemd, akses sudo, Unbound, Git, dan koneksi paket APT.
-- **Dipasang oleh installer**: Nginx, MySQL 8, PHP 8.4 CLI/FPM dengan PDO MySQL, Python 3, OpenSSL, curl, rsync, cron, iproute2, dan dnsperf. PHP 8.4 diambil dari PPA Ondřej jika paket belum tersedia.
-- **Opsional**: `unbound-anchor` untuk menyiapkan trust anchor DNSSEC, UFW untuk firewall, dan Zabbix Agent atau Agent 2 untuk menu Zabbix.
+- **Server**: Ubuntu 22.04 LTS, systemd, akses `sudo`, Unbound, dan akses ke APT serta GitHub.
+- **Dipasang oleh installer**: Git, Nginx, MySQL 8, PHP 8.4 CLI/FPM dengan PDO MySQL, Python 3, OpenSSL, curl, rsync, cron, iproute2, dan dnsperf. Installer menambahkan PPA Ondřej jika paket PHP 8.4 belum tersedia.
+- **Opsional**: `unbound-anchor` untuk mengelola trust anchor DNSSEC, UFW untuk menu Firewall, dan Zabbix Agent atau Agent 2 untuk ekspor metrik.
 
 ## Instalasi awal
 
@@ -14,12 +14,12 @@ Di server baru, siapkan Unbound terlebih dahulu:
 
 ```bash
 sudo apt update &&
-sudo apt install -y git unbound ufw &&
+sudo apt install -y git unbound &&
 sudo systemctl enable --now unbound &&
 sudo unbound-checkconf /etc/unbound/unbound.conf
 ```
 
-Contoh konfigurasi ada di [unbound.conf.example](unbound.conf.example). Aktifkan `remote-control` lokal agar statistik DNS tampil di panel.
+Gunakan [unbound.conf.example](unbound.conf.example) sebagai acuan. Sesuaikan IP, ACL, dan ukuran cache dengan server. Periksa file root hints, trust anchor, dan sertifikat kontrol yang dirujuk contoh sebelum menggunakannya. Aktifkan `remote-control` lokal agar panel bisa membaca statistik DNS.
 
 ```bash
 cd ~ &&
@@ -42,11 +42,11 @@ Jika pesan `503` masih muncul, tunggu beberapa menit lalu ulangi perintah yang s
 
 ## Update dari main
 
-Versi dimulai dari **1.0.30**. Panel memakai hash commit sebagai kunci, menghitung versi dari riwayat `main`, dan menyimpan pasangan hash serta versi di MySQL. Setiap commit baru pada jalur utama menambah angka terakhir satu kali. Panel menampilkan versi dan hash lengkap.
+Panel menghitung versi dari riwayat utama `main` mulai **1.0.30**. Setiap commit baru di jalur itu menambah angka terakhir versi satu kali. MySQL menyimpan versi, hash lengkap, serta waktu pengecekan dan pemasangan.
 
-Setelah memasang versi ini, buka **Pembaruan → Check for update**, cek commit yang tampil, lalu pilih **Pasang pembaruan**. Panel mengambil checkout `main` dari repo GitHub proyek ke `/opt/www/unbound-web/.updates/` dan menjalankan `install.sh` melalui systemd. Status tetap tersedia setelah PHP-FPM dimulai ulang. Untuk melihat kegagalan, jalankan `sudo journalctl -u unbound-web-update -n 50`.
+Buka **Pembaruan → Check for update**, periksa versi dan hash, lalu pilih **Pasang pembaruan**. Panel mengambil commit dari GitHub ke `/opt/www/unbound-web/.updates/` dan menjalankan `install.sh` melalui systemd. Jika gagal, cek `sudo journalctl -u unbound-web-update -n 50`.
 
-Untuk memasang versi ini pertama kali atau memperbarui lewat terminal:
+Untuk memperbarui lewat terminal, jalankan dari folder repo dengan riwayat Git lengkap:
 
 ```bash
 cd ~/Unbound_DNS_Web-Manager &&
@@ -61,12 +61,14 @@ sudo bash ./install.sh
 |---|---|
 | **Monitor** | QPS, cache, latensi, CPU, RAM, disk, dan RX/TX. Dashboard diperbarui per detik dengan riwayat 10 menit. |
 | **Unbound** | Cek, simpan, reload, start/stop, root hints, DNSSEC, dan sertifikat TLS remote-control. Perubahan konfigurasi yang berhasil disimpan ke file dan database. |
-| **Live Log** | Buka **Unbound → Live Log** untuk membaca journal dan mengaktifkan atau menonaktifkan log query dan reply secara terpisah. **Stop** menghentikan sesi. |
-| **Cron / Uji DNS** | Status monitoring, jadwal filter, dan uji resolver dengan dnsperf. |
-| **Zabbix Agent** | Edit konfigurasi, muat ulang agen, dan aktifkan ekspor metrik Unbound. Lihat [panduan item dan grafik Zabbix](docs/zabbix.md). |
+| **Live Log** | Baca 40 entri journal terakhir dan ikuti log baru. Log query dan reply punya toggle terpisah. **Stop** menghentikan sesi log. |
+| **Cron / Uji DNS** | Lihat status monitoring dan jadwal filter. Jalankan satu pengujian dnsperf sekaligus ke IPv4 privat atau loopback, maksimal 16 client, 4 thread, dan 1.000 QPS. |
+| **Zabbix Agent** | Edit konfigurasi agen atau aktifkan item `unbound.web.metrics` untuk total query, total reply, QPS, dan metrik Linux. Lihat [panduan item dan grafik Zabbix](docs/zabbix.md). |
 | **Firewall** | Kelola rule, status, dan reload UFW. |
 
 Tema **Sistem** mengikuti OS. Pilih **Terang** atau **Gelap** untuk menyimpan pilihan di browser.
+
+Untuk produksi, batasi akses panel ke jaringan admin atau VPN dan izinkan kueri DNS hanya dari subnet klien. Lihat [panduan keamanan](SECURITY.md).
 
 ## Filter DNS
 
@@ -80,6 +82,11 @@ Tema **Sistem** mengikuti OS. Pilih **Terang** atau **Gelap** untuk menyimpan pi
 
 3. Setelah include aktif, tombol berubah untuk menghapus include dan menonaktifkan filter terkait. Konfigurasi dan pengaturan dicatat ke database. Sinkronisasi berjalan pukul 03.15 waktu server. Gunakan **Update & Apply Now** untuk sinkronisasi langsung.
 
+Salin URL sumber yang ingin dipakai ke kolom filter terkait.
+
+- [Whitelist domain Eki Guistian](https://raw.githubusercontent.com/ekiguistian/whitelist-host/refs/heads/main/whitelist-domain.txt)
+- [Blocklist hosts StevenBlack](https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/fakenews-gambling-porn-social-only/hosts)
+
 Hasil konversi ada di `/var/lib/unbound-web-filters/`. Log ada di `/var/log/unbound-web-filters.log`. Untuk daftar jutaan domain, sediakan RAM tambahan saat validasi dan reload.
 
 ```mermaid
@@ -90,25 +97,21 @@ flowchart LR
 
 ## Screenshot
 
-### Login
+### Monitor
 
-![Login dengan tema gelap](docs/screenshots/login-tema-gelap.png)
+![Statistik DNS dengan tema gelap](docs/screenshots/monitoring-dns.png)
 
-### Monitoring
+![Statistik DNS dengan tema terang](docs/screenshots/monitoring-dns-terang.png)
 
-![Dashboard statistik DNS dan grafik QPS, cache, serta latensi](docs/screenshots/monitoring-dns.png)
+### Kontrol dan pembaruan
 
-![Grafik CPU, memori, dan disk](docs/screenshots/monitoring-sumber-daya.png)
+![Kontrol resolver, root hints, DNSSEC, dan sertifikat](docs/screenshots/kontrol-unbound.png)
 
-![Grafik RX dan TX serta statistik server](docs/screenshots/monitoring-jaringan.png)
+![Ekspor statistik Unbound ke Zabbix Agent](docs/screenshots/zabbix-agent.png)
 
-### Kontrol server
+![Status dan pengelolaan aturan UFW](docs/screenshots/firewall-ufw.png)
 
-![Kontrol Unbound, root hints, DNSSEC, dan sertifikat](docs/screenshots/kontrol-unbound.png)
-
-![Status firewall UFW dan aturan yang tersimpan](docs/screenshots/firewall-ufw.png)
-
-![Status worker monitoring dan jadwal filter](docs/screenshots/jadwal-worker.png)
+![Panel pembaruan dengan versi dan hash commit](docs/screenshots/pembaruan.png)
 
 ## Atribusi
 
