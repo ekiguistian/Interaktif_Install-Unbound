@@ -7,9 +7,9 @@ $zabbixMetrics = $metricsResult['code'] === 0 ? json_decode($metricsResult['outp
 <section class="panel p-5 mb-5 space-y-4">
   <h2 class="font-semibold">Statistik Unbound untuk Zabbix</h2>
   <?php if (!is_array($zabbixMetrics)): ?>
-    <p class="text-rose-300">Status ekspor metrik belum bisa dibaca.</p>
+    <p class="text-rose-300">Status ekspor metrik belum tersedia.</p>
   <?php else: ?>
-    <p class="text-sm text-slate-400">Item <code>unbound.web.metrics</code> menyediakan total query, total reply, QPS, dan metrik Linux.</p>
+    <p class="text-sm text-slate-400">Item <code>unbound.web.metrics</code> menyediakan total kueri, total jawaban, QPS, dan metrik Linux.</p>
     <div class="flex flex-wrap items-center gap-3">
       <form data-api="<?=$zabbixMetrics['enabled'] ? 'zabbix-metrics-disable' : 'zabbix-metrics-enable'?>" data-output="#zabbix-metrics-result">
         <button class="btn-secondary" type="submit"><?=$zabbixMetrics['enabled'] ? 'Nonaktifkan statistik Unbound' : 'Aktifkan statistik Unbound'?></button>

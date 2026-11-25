@@ -35,7 +35,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!$tooMany) {
                 db()->prepare('INSERT INTO login_attempts (remote_addr) VALUES (?)')->execute([client_ip()]);
             }
-            $message = $tooMany ? 'Terlalu banyak percobaan. Coba lagi setelah 15 menit.' : 'Username atau password tidak benar.';
+            $message = $tooMany ? 'Terlalu banyak percobaan. Coba lagi dalam 15 menit.' : 'Nama pengguna atau password salah.';
         } catch (Throwable $error) {
             error_log('Unbound Web login: ' . $error->getMessage());
             $message = 'Database belum siap. Periksa konfigurasi .env.';
@@ -46,7 +46,7 @@ $next = (string)($_GET['next'] ?? $_POST['next'] ?? '/');
 if (!preg_match('~^/(?:settings(?:/[a-z]+(?:-[a-z]+)*)?)?$~D', $next)) {
     $next = '/';
 }
-page_start('Login admin', false, 'login');
+page_start('Masuk', false, 'login');
 $resetSuccess = !empty($_SESSION['password_reset_success']);
 unset($_SESSION['password_reset_success']);
 ?>
@@ -54,12 +54,12 @@ unset($_SESSION['password_reset_success']);
   <section class="panel login-card">
     <div class="login-icon"><i class="fa-solid fa-lock" aria-hidden="true"></i></div>
     <h1>Masuk ke panel Unbound</h1>
-    <p class="mt-2 text-sm leading-6 text-slate-400">Silahkan login untuk memantau DNS Server dan melakukan configurasi</p>
+    <p class="mt-2 text-sm leading-6 text-slate-400">Masuk untuk memantau server DNS dan mengelola konfigurasi Unbound.</p>
     <?php if ($resetSuccess) notice('Password sudah diubah. Masuk dengan password baru.'); ?>
     <?php if ($message !== ''): ?><div class="mt-5 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-200"><?= e($message) ?></div><?php endif; ?>
     <form method="post" class="mt-6 space-y-4">
       <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>"><input type="hidden" name="next" value="<?= e($next) ?>">
-      <label class="block"><span class="mb-2 block text-sm">Username</span><input class="form-input" name="username" autocomplete="username" required></label>
+      <label class="block"><span class="mb-2 block text-sm">Nama pengguna</span><input class="form-input" name="username" autocomplete="username" required></label>
       <label class="block"><span class="mb-2 block text-sm">Password</span><input class="form-input" type="password" name="password" autocomplete="current-password" required></label>
       <button class="btn-primary w-full" type="submit"><i class="fa-solid fa-arrow-right-to-bracket" aria-hidden="true"></i>Masuk</button>
     </form>

@@ -18,7 +18,7 @@
         const body = await response.text();
         let result;
         try { result = JSON.parse(body); }
-        catch (_) { throw new Error('Server tidak mengirim hasil (HTTP ' + response.status + '). Muat ulang halaman dan cek status sebelum mengulang.'); }
+        catch (_) { throw new Error('Panel belum menerima hasil (HTTP ' + response.status + '). Muat ulang halaman dan periksa statusnya sebelum mencoba lagi.'); }
         if (output) {
           output.textContent = result.message || (result.ok ? 'Berhasil.' : 'Permintaan gagal.');
         }
@@ -33,7 +33,7 @@
         }
         if (result.ok && form.dataset.reload !== 'false') setTimeout(() => location.reload(), 700);
       } catch (error) {
-        if (output) output.textContent = 'Permintaan gagal: ' + error.message;
+        if (output) output.textContent = 'Permintaan gagal. ' + error.message;
       } finally {
         if (button) { button.disabled = false; button.innerHTML = button.dataset.oldText; }
       }
@@ -66,7 +66,7 @@
           body: JSON.stringify(payload), signal: controller?.signal
         });
         if (!response.ok || !response.body) throw new Error('Server menolak proses (' + response.status + ').');
-        if (!response.headers.get('content-type')?.includes('text/event-stream')) throw new Error('Response streaming bukan SSE.');
+        if (!response.headers.get('content-type')?.includes('text/event-stream')) throw new Error('Panel tidak menerima aliran data dari server.');
         if (logStatus) logStatus.textContent = 'Menampilkan log langsung.';
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -90,7 +90,7 @@
               }
               if (eventData.done === true) {
                 streamExitCode = Number(eventData.exitCode);
-                if (logStatus) logStatus.textContent = streamExitCode === 0 ? 'Live Log berakhir.' : 'Live Log gagal. Lihat pesan di bawah.';
+                if (logStatus) logStatus.textContent = streamExitCode === 0 ? 'Log langsung selesai.' : 'Log langsung gagal. Lihat pesan di bawah.';
                 else if (output) output.textContent += streamExitCode === 0 ? '\n[SELESAI:0]\n' : '\n[PROSES GAGAL:' + streamExitCode + ']\n';
               }
               if (output) output.scrollTop = output.scrollHeight;
@@ -100,14 +100,14 @@
           }
         }
         if (streamExitCode === null || !Number.isInteger(streamExitCode)) {
-          throw new Error('Streaming berakhir tanpa status akhir dari server.');
+          throw new Error('Koneksi berakhir sebelum hasil diterima.');
         }
         if (output && /\[PROSES GAGAL:/.test(output.textContent)) output.classList.add('text-rose-300');
       } catch (error) {
         if (controller?.signal.aborted) {
-          logStatus.textContent = 'Live Log dihentikan.';
+          logStatus.textContent = 'Log langsung dihentikan.';
         } else {
-          if (logStatus) logStatus.textContent = 'Live Log terputus.';
+          if (logStatus) logStatus.textContent = 'Koneksi log langsung terputus.';
           if (output) { output.textContent += '\n' + error.message; output.classList.add('text-rose-300'); }
         }
       } finally {
@@ -164,7 +164,7 @@
     }
     check.addEventListener('click', () => requestUpdate('update-check'));
     install.addEventListener('click', () => {
-      if (window.confirm('Pasang commit yang baru dicek dari GitHub main?')) requestUpdate('update-run');
+      if (window.confirm('Pasang pembaruan yang baru diperiksa?')) requestUpdate('update-run');
     });
     requestUpdate('update-status');
   }
@@ -176,6 +176,7 @@
   const rate = bits => bits == null ? '—' : bits >= 1000000 ? fmt(bits / 1000000, 'Mbps') : fmt(bits / 1000, 'kbps');
   const charts = new Map();
   const units = {qps:'QPS', cache_hit_ratio:'%', recursion_avg_ms:'ms', cpu_percent:'%', memory_used_mb:'MiB', disk_used_gb:'GiB'};
+  const serviceLabels = {active:'Aktif', inactive:'Nonaktif', failed:'Gagal', activating:'Memulai', deactivating:'Berhenti', unknown:'Status belum diketahui', 'not-installed':'Belum terpasang'};
   let payload;
   let colors = chartColors();
   let themeRevision = 0;
@@ -233,7 +234,8 @@
     serverOffset = latest.recorded_at ? Date.parse(latest.recorded_at.replace(' ', 'T') + 'Z') - Number(latest.epoch) * 1000 : 0;
     show('host', payload.host);
     show('system-info', payload.os + ' · kernel ' + payload.kernel);
-    show('service', [payload.services.unbound, payload.services.unbound_version, latest.epoch && latest.total_queries == null ? 'statistik belum tersedia' : ''].filter(Boolean).join(' · '));
+    const service = serviceLabels[payload.services.unbound] ?? payload.services.unbound;
+    show('service', [service, payload.services.unbound_version, latest.epoch && latest.total_queries == null ? 'statistik belum tersedia' : ''].filter(Boolean).join(' · '));
     show('sample', latest.epoch ? latest.recorded_at + (payload.now - latest.epoch > 5 ? ' · data terlambat' : '') : 'Belum ada sampel');
     for (const [key,unit] of Object.entries(units)) {
       const total = key === 'memory_used_mb' ? latest.memory_total_mb : key === 'disk_used_gb' ? latest.disk_total_gb : null;

@@ -4,7 +4,7 @@ declare(strict_types=1);
 $resultState = manage(['resolver-state'], null, 8);
 $resolver = $resultState['code'] === 0 ? json_decode($resultState['output'], true) : null;
 if (!is_array($resolver)) {
-    notice('Status Unbound belum bisa dibaca. ' . trim($resultState['output']), 'error');
+    notice('Status Unbound belum tersedia. ' . trim($resultState['output']), 'error');
     return;
 }
 $running = $resolver['service'] === 'active';
@@ -26,8 +26,8 @@ $badge = static function (bool $enabled, string $label): void { ?>
     <?php if ($ready) $button('unbound-check', 'Cek konfigurasi Unbound', 'resolver-result', false); ?>
     <?php if ($running): ?>
       <?php $button('stats', 'Baca statistik', 'resolver-result', false); ?>
-      <?php $button('unbound-reload', 'Reload server DNS', 'resolver-result', true, 'Muat ulang server DNS?'); ?>
-      <?php $button('unbound-restart', 'Restart Unbound', 'resolver-result', true, 'Mulai ulang server DNS?'); ?>
+      <?php $button('unbound-reload', 'Muat ulang konfigurasi', 'resolver-result', true, 'Muat ulang konfigurasi Unbound?'); ?>
+      <?php $button('unbound-restart', 'Mulai ulang Unbound', 'resolver-result', true, 'Mulai ulang Unbound?'); ?>
       <?php $button('unbound-stop', 'Nonaktifkan Unbound', 'resolver-result', true, 'Hentikan Unbound? Permintaan DNS ke resolver ini akan berhenti dilayani.'); ?>
     <?php elseif ($ready && in_array($resolver['service'], ['inactive','failed'], true)): ?>
       <?php $button('unbound-start', 'Aktifkan Unbound', 'resolver-result'); ?>
@@ -39,13 +39,13 @@ $badge = static function (bool $enabled, string $label): void { ?>
 <section class="panel p-5 mb-5 space-y-4">
   <div class="flex flex-wrap items-center gap-3">
     <h2 class="font-semibold">Keamanan DNS</h2>
-    <?php if (!$resolver['live']): ?><span class="state-label">Berdasarkan konfigurasi di disk</span><?php endif; ?>
+    <?php if (!$resolver['live']): ?><span class="state-label">Berdasarkan konfigurasi tersimpan</span><?php endif; ?>
   </div>
   <div class="resolver-grid">
     <article class="resolver-card">
       <h3>Root hints</h3>
       <?php $badge($resolver['root_hints_active'], $resolver['root_hints_active'] ? 'Aktif' : 'Bawaan Unbound'); ?>
-      <p><?=e($resolver['root_hints_ready'] ? 'Daftar root server siap diperbarui.' : 'Siapkan daftar dari InterNIC untuk memakai file root hints.')?></p>
+      <p><?=e($resolver['root_hints_ready'] ? 'File root hints tersedia.' : 'Unduh daftar server root dari InterNIC.')?></p>
       <div class="flex flex-wrap gap-2">
         <?php if ($running && $resolver['root_hints_active']) $button('root-hints-disable', 'Nonaktifkan root hints', 'unbound-dns-result'); ?>
         <?php if ($running && !$resolver['root_hints_active'] && $resolver['root_hints_ready']) $button('root-hints-enable', 'Aktifkan root hints', 'unbound-dns-result'); ?>
@@ -57,7 +57,7 @@ $badge = static function (bool $enabled, string $label): void { ?>
       <?php $strict = $resolver['dnssec_active'] && !$resolver['dnssec_permissive']; ?>
       <?php $badge($strict, $strict ? 'Aktif' : ($resolver['dnssec_active'] ? 'Permisif' : 'Nonaktif')); ?>
       <p><?php if (!$resolver['anchor_tool'] && !$resolver['anchor_ready']): ?>Pasang alat dengan <code>sudo apt install unbound-anchor</code> untuk menyiapkan trust anchor.
-      <?php else: ?><?=e($resolver['anchor_ready'] ? 'Trust anchor root tersedia.' : 'Siapkan trust anchor sebelum mengaktifkan DNSSEC.')?><?php endif; ?></p>
+      <?php else: ?><?=e($resolver['anchor_ready'] ? 'Trust anchor tersedia.' : 'Siapkan trust anchor sebelum mengaktifkan DNSSEC.')?><?php endif; ?></p>
       <div class="flex flex-wrap gap-2">
         <?php if ($running && $strict) $button('dnssec-disable', 'Nonaktifkan DNSSEC', 'unbound-dns-result', true, 'Nonaktifkan validasi DNSSEC?'); ?>
         <?php if ($running && !$strict && $resolver['anchor_ready']) $button('dnssec-enable', 'Aktifkan DNSSEC', 'unbound-dns-result'); ?>
@@ -68,11 +68,11 @@ $badge = static function (bool $enabled, string $label): void { ?>
       <h3>Sertifikat kontrol</h3>
       <?php $badge($resolver['certificates_ready'], $resolver['certificates_ready'] ? 'Tersedia' : ($resolver['unix_control'] ? 'Socket Unix' : 'Belum siap')); ?>
       <?php if ($resolver['certificates_ready']): ?>
-        <p><?=e($resolver['tls_enabled'] ? 'TLS diaktifkan dalam konfigurasi remote-control.' : 'File tersedia. Gunakan melalui pengaturan remote-control TCP bila diperlukan.')?></p>
+        <p><?=e($resolver['tls_enabled'] ? 'TLS aktif untuk remote-control.' : 'Sertifikat tersedia untuk remote-control lewat TCP.')?></p>
       <?php elseif ($resolver['unix_control']): ?>
         <p>Socket Unix lokal tidak memakai sertifikat TLS.</p>
       <?php elseif ($resolver['certificates_can_prepare']): ?>
-        <p>Siapkan sertifikat untuk remote-control melalui TLS.</p>
+        <p>Buat sertifikat untuk remote-control lewat TLS.</p>
         <?php $button('control-certificates', 'Siapkan sertifikat', 'unbound-dns-result'); ?>
       <?php else: ?>
         <p>Periksa kelengkapan file pada pengaturan remote-control.</p>

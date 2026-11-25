@@ -14,8 +14,8 @@ if (!in_array($direction, ['all', 'in', 'out'], true)) {
 $ruleFields = static function (array $rule): void { ?>
   <div class="grid gap-4 sm:grid-cols-2">
     <?php foreach ([
-        'rule_action' => ['Aksi', 'action', ['allow' => 'Allow', 'deny' => 'Deny']],
-        'direction' => ['Arah', 'direction', ['in' => 'IN', 'out' => 'OUT']],
+        'rule_action' => ['Aksi', 'action', ['allow' => 'Izinkan', 'deny' => 'Tolak']],
+        'direction' => ['Arah', 'direction', ['in' => 'Masuk', 'out' => 'Keluar']],
     ] as $name => [$label, $key, $options]): ?>
       <fieldset>
         <legend class="mb-2 text-sm font-medium"><?= e($label) ?></legend>
@@ -43,7 +43,7 @@ $ruleFields = static function (array $rule): void { ?>
     </label>
   </div>
   <div class="mt-4">
-    <?php field('IP/CIDR', 'peer', $rule['peer'], 'text', 'Untuk IN, isi IP sumber. Untuk OUT, isi IP tujuan. Kosong berarti semua alamat.', false); ?>
+    <?php field('IP/CIDR', 'peer', $rule['peer'], 'text', 'Untuk aturan masuk, isi IP sumber. Untuk aturan keluar, isi IP tujuan. Kosongkan untuk semua alamat.', false); ?>
   </div>
 <?php };
 
@@ -56,7 +56,7 @@ page_start('Firewall UFW', true);
       <p class="mt-1 text-sm <?= $firewall && $firewall['active'] ? 'text-emerald-300' : 'text-slate-400' ?>"><?= $firewall ? ($firewall['active'] ? 'Aktif' : 'Nonaktif') : 'Tidak tersedia' ?></p>
     </div>
     <div class="flex flex-wrap gap-2">
-      <?php foreach (['enable' => 'Enable UFW', 'disable' => 'Disable UFW'] as $action => $label): ?>
+      <?php foreach (['enable' => 'Aktifkan UFW', 'disable' => 'Nonaktifkan UFW'] as $action => $label): ?>
         <form data-api="firewall-<?= e($action) ?>" data-confirm="<?= e($action === 'enable'
             ? 'Pastikan aturan SSH dan port web tersedia sebelum mengaktifkan UFW. Lanjutkan?'
             : 'Nonaktifkan UFW dan hentikan penerapan aturan firewall?') ?>">
@@ -65,7 +65,7 @@ page_start('Firewall UFW', true);
             <?= !$firewall || $firewall['active'] === ($action === 'enable') ? 'disabled' : '' ?>><?= e($label) ?></button>
         </form>
       <?php endforeach; ?>
-      <form data-api="firewall-reload"><button type="submit" class="btn-secondary">Reload UFW</button></form>
+      <form data-api="firewall-reload"><button type="submit" class="btn-secondary">Muat ulang UFW</button></form>
     </div>
   </nav>
   <p data-page-result role="status" class="mt-2 text-sm text-cyan-200"></p>
@@ -87,7 +87,7 @@ page_start('Firewall UFW', true);
     <div class="flex flex-wrap items-center justify-between gap-3">
       <h2 class="font-semibold">Aturan tersimpan</h2>
       <nav class="flex gap-2" aria-label="Filter arah aturan">
-        <?php foreach (['all' => 'Semua', 'in' => 'IN', 'out' => 'OUT'] as $value => $label): ?>
+        <?php foreach (['all' => 'Semua', 'in' => 'Masuk', 'out' => 'Keluar'] as $value => $label): ?>
           <a class="btn-secondary <?= $value === $direction ? 'nav-active' : '' ?>" href="?direction=<?= e($value) ?>" <?= $value === $direction ? 'aria-current="true"' : '' ?>><?= e($label) ?></a>
         <?php endforeach; ?>
       </nav>
@@ -104,14 +104,14 @@ page_start('Firewall UFW', true);
         <li class="rounded-xl border border-slate-700 p-3">
           <?php if ($rule === null): ?>
             <code class="break-all text-sm text-slate-300"><?= e($item['text']) ?></code>
-            <p class="mt-1 text-xs text-slate-400">Aturan lanjutan · baca saja</p>
+            <p class="mt-1 text-xs text-slate-400">Aturan lanjutan · hanya baca</p>
           <?php else: ?>
             <details>
               <summary class="cursor-pointer break-words text-sm">
-                <span class="<?= $rule['action'] === 'allow' ? 'text-emerald-300' : 'text-rose-300' ?>"><?= e(strtoupper($rule['action'])) ?></span>
-                <?= e(strtoupper($rule['direction'])) ?> · <?= $rule['port'] !== '' ? e($rule['port']) . '/' : '' ?><?= e(strtoupper($rule['protocol'])) ?>
+                <span class="<?= $rule['action'] === 'allow' ? 'text-emerald-300' : 'text-rose-300' ?>"><?= $rule['action'] === 'allow' ? 'Izinkan' : 'Tolak' ?></span>
+                <?= $rule['direction'] === 'in' ? 'Masuk' : 'Keluar' ?> · <?= $rule['port'] !== '' ? e($rule['port']) . '/' : '' ?><?= e(strtoupper($rule['protocol'])) ?>
                 <span class="text-slate-400">· <?= e($rule['peer'] ?: 'Semua alamat') ?></span>
-                <span class="ml-2 text-cyan-200">Ubah / Hapus</span>
+                <span class="ml-2 text-cyan-200">Ubah atau hapus</span>
               </summary>
               <?php if ($item['comment'] !== ''): ?><p class="mt-2 text-xs text-slate-400"><?= e($item['comment']) ?></p><?php endif; ?>
               <form class="mt-4" data-api="firewall-update">
@@ -129,10 +129,10 @@ page_start('Firewall UFW', true);
           <?php endif; ?>
         </li>
       <?php endforeach; ?>
-      <?php if (!$shown): ?><li class="text-sm text-slate-400">Belum ada aturan pada tampilan ini.</li><?php endif; ?>
+      <?php if (!$shown): ?><li class="text-sm text-slate-400">Belum ada aturan untuk arah ini.</li><?php endif; ?>
     </ul>
     <details class="mt-5 text-sm">
-      <summary class="cursor-pointer text-slate-300">Status aktif dari UFW</summary>
+      <summary class="cursor-pointer text-slate-300">Detail status UFW</summary>
       <pre class="mt-3 max-h-64 overflow-auto rounded-xl bg-black/50 p-4 text-xs text-slate-300"><?= e($firewall['status']) ?></pre>
     </details>
   </div>

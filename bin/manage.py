@@ -1024,7 +1024,7 @@ def live_unbound_log():
                 break
             except BlockingIOError as error:
                 if time.monotonic() >= deadline:
-                    raise ValueError("Live Log sedang dibuka di sesi lain. Hentikan sesi tersebut atau coba lagi.") from error
+                    raise ValueError("Log langsung sedang dibuka di sesi lain. Hentikan sesi itu atau coba lagi.") from error
                 time.sleep(0.1)
         process = subprocess.Popen(["/usr/bin/journalctl", "--unit=unbound.service", "--follow", "--lines=40",
                                     "--output=short-iso", "--no-pager"], stdin=subprocess.DEVNULL,

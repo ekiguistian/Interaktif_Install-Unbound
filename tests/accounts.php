@@ -32,24 +32,49 @@ if ($dsn) {
     $db->exec('CREATE TABLE panel_recovery (id INTEGER PRIMARY KEY, challenge TEXT, otp_hash TEXT, issued_at INTEGER, attempts INTEGER)');
 }
 
-seed_panel_account($db, 'legacy-user', 'Legacy!a', '');
+$legacyPassword = 'Legacy-password!';
+$newPassword = 'A123456789!Z';
+$resetPassword = 'B!2z';
+foreach (['abc', 'A123456789!Z0', "abc\n", '    '] as $invalidPassword) {
+    check(!valid_panel_password($invalidPassword), 'Password outside the policy is rejected.');
+}
+foreach ([$newPassword, $resetPassword, 'é🙂é🙂'] as $validPassword) {
+    check(valid_panel_password($validPassword), 'Lengths 4 and 12 are valid and multibyte characters count as characters.');
+}
+check(panel_password_error($resetPassword, 'B!2y') !== null, 'Confirmation must match.');
+
+seed_panel_account($db, 'legacy-user', $legacyPassword, '');
 $original = panel_account($db);
-check(password_verify('Legacy!a', $original['password_hash']) && $original['recovery_email'] === null, 'Legacy login survives migration.');
+check(password_verify($legacyPassword, $original['password_hash']) && $original['recovery_email'] === null, 'Legacy password still works outside the new range.');
 seed_panel_account($db, '', '', '');
 check(panel_account($db) === $original, 'Update skips existing account with no bootstrap credentials.');
 
-$profile = ['username' => 'operator', 'current_password' => 'Legacy!a', 'recovery_email' => 'Recovery@example.net'];
+$profile = ['username' => 'operator', 'current_password' => $legacyPassword, 'recovery_email' => 'Recovery@example.net'];
 $newVersion = change_panel_account($db, $profile);
 check(panel_account($db)['username'] === 'operator' && $newVersion !== $original['session_version'], 'Profile changes invalidate other sessions.');
-check(password_verify('Legacy!a', panel_account($db)['password_hash']), 'Profile changes preserve existing password when left empty.');
+check(password_verify($legacyPassword, panel_account($db)['password_hash']), 'Profile changes preserve existing password when left empty.');
 try {
     change_panel_account($db, array_replace($profile, ['current_password' => 'wrong', 'username' => 'replacement']));
     throw new RuntimeException('Incorrect password was accepted.');
 } catch (DomainException) {
     check(panel_account($db)['username'] === 'operator', 'Incorrect password cannot change the account.');
 }
+foreach ([
+    ['new_password' => 'abc', 'confirm_password' => 'abc'],
+    ['new_password' => 'A123456789!Z0', 'confirm_password' => 'A123456789!Z0'],
+    ['confirm_password' => 'abcd'],
+] as $invalidChange) {
+    try {
+        change_panel_account($db, $profile + $invalidChange);
+        throw new RuntimeException('Invalid password change was accepted.');
+    } catch (DomainException) {
+        check(password_verify($legacyPassword, panel_account($db)['password_hash']), 'Invalid input preserves the existing password.');
+    }
+}
+$newVersion = change_panel_account($db, $profile + ['new_password' => $newPassword, 'confirm_password' => $newPassword]);
+check(password_verify($newPassword, panel_account($db)['password_hash']), 'The 12-character password saves from the account form.');
 
-$smtp = ['host' => 'relay.example.net', 'port' => '25', 'encryption' => 'none', 'sender' => 'sender@example.net', 'current_password' => 'Legacy!a'];
+$smtp = ['host' => 'relay.example.net', 'port' => '25', 'encryption' => 'none', 'sender' => 'sender@example.net', 'current_password' => $newPassword];
 $key = random_bytes(32);
 save_panel_smtp($db, $smtp);
 check(issue_panel_otp($db, $profile['recovery_email'], $key, 1000) === null, 'Disabled SMTP will not issue an OTP.');
@@ -58,17 +83,19 @@ check(issue_panel_otp($db, $smtp['sender'], $key, 1000) === null, 'SMTP sender c
 $delivery = issue_panel_otp($db, 'recovery@example.net', $key, 1000);
 check($delivery !== null && $delivery['recipient'] === 'Recovery@example.net', 'OTP is addressed to the account recovery email.');
 check(issue_panel_otp($db, $profile['recovery_email'], $key, 1059) === null, 'OTP requests share a resend cooldown.');
-check(!redeem_panel_otp($db, str_repeat('0', 64), $delivery['otp'], 'Next-passphrase!', $key, 1001), 'Different browser cannot redeem the OTP.');
+check(!redeem_panel_otp($db, str_repeat('0', 64), $delivery['otp'], $resetPassword, $key, 1001), 'Different browser cannot redeem the OTP.');
 for ($i = 0; $i < RECOVERY_OTP_ATTEMPTS; $i++) {
-    check(!redeem_panel_otp($db, $delivery['challenge'], '00000000', 'Next-passphrase!', $key, 1001), 'Wrong OTP is rejected.');
+    check(!redeem_panel_otp($db, $delivery['challenge'], '00000000', $resetPassword, $key, 1001), 'Wrong OTP is rejected.');
 }
-check(!redeem_panel_otp($db, $delivery['challenge'], $delivery['otp'], 'Next-passphrase!', $key, 1001), 'Five failed attempts lock the OTP.');
+check(!redeem_panel_otp($db, $delivery['challenge'], $delivery['otp'], $resetPassword, $key, 1001), 'Five failed attempts lock the OTP.');
 $delivery = issue_panel_otp($db, $profile['recovery_email'], $key, 1060);
-check(!redeem_panel_otp($db, $delivery['challenge'], $delivery['otp'], 'Next-passphrase!', $key, 1660), 'Expired OTP cannot be used.');
+check(!redeem_panel_otp($db, $delivery['challenge'], $delivery['otp'], $resetPassword, $key, 1660), 'Expired OTP cannot be used.');
 $delivery = issue_panel_otp($db, $profile['recovery_email'], $key, 1661);
-check(redeem_panel_otp($db, $delivery['challenge'], $delivery['otp'], 'Next-passphrase!', $key, 1662), 'Valid OTP changes the password.');
-check(!redeem_panel_otp($db, $delivery['challenge'], $delivery['otp'], 'New-passphrase!', $key, 1663), 'OTP can only be used once.');
-check(panel_account($db)['session_version'] !== $newVersion && password_verify('Next-passphrase!', panel_account($db)['password_hash']),
+check(!redeem_panel_otp($db, $delivery['challenge'], $delivery['otp'], 'abc', $key, 1662), 'Reset rejects a 3-character password.');
+check(!redeem_panel_otp($db, $delivery['challenge'], $delivery['otp'], 'A123456789!Z0', $key, 1662), 'Reset rejects a 13-character password.');
+check(redeem_panel_otp($db, $delivery['challenge'], $delivery['otp'], $resetPassword, $key, 1662), 'Valid OTP can set a 4-character password.');
+check(!redeem_panel_otp($db, $delivery['challenge'], $delivery['otp'], $newPassword, $key, 1663), 'OTP can only be used once.');
+check(panel_account($db)['session_version'] !== $newVersion && password_verify($resetPassword, panel_account($db)['password_hash']),
     'Reset invalidates sessions and updates login.');
 
 $encrypted = encrypt_smtp_password('smtp-secret', $key);

@@ -44,7 +44,7 @@ Jika pesan `503` masih muncul, tunggu beberapa menit lalu ulangi perintah yang s
 
 Panel menghitung versi dari riwayat utama `main` mulai **1.0.30**. Setiap commit baru di jalur itu menambah angka terakhir versi satu kali. MySQL menyimpan versi, hash lengkap, serta waktu pengecekan dan pemasangan.
 
-Buka **Pembaruan → Check for update**, periksa versi dan hash, lalu pilih **Pasang pembaruan**. Panel mengambil commit dari GitHub ke `/opt/www/unbound-web/.updates/` dan menjalankan `update.sh` melalui systemd. Jika gagal, cek `sudo journalctl -u unbound-web-update -n 50`.
+Buka **Pembaruan → Cek pembaruan**, periksa versi dan hash, lalu pilih **Pasang pembaruan**. Panel mengambil commit dari GitHub ke `/opt/www/unbound-web/.updates/` dan menjalankan `update.sh` melalui systemd. Jika gagal, cek `sudo journalctl -u unbound-web-update -n 50`.
 
 Untuk memperbarui lewat terminal, jalankan dari folder repo dengan riwayat Git lengkap:
 
@@ -59,7 +59,7 @@ Pembaruan berjalan tanpa meminta email. Setelah migrasi pertama, masuk lagi deng
 
 ## Akun dan pemulihan
 
-Di menu **Akun**, ubah username, password, dan email pemulihan. Isi host, port, sender, dan mode SMTP, lalu aktifkan SMTP. Gunakan **STARTTLS** atau **SSL/TLS** untuk SMTP dengan autentikasi. Mode **None** mendukung relay tanpa autentikasi.
+Di menu **Akun**, ubah nama pengguna, password, dan email pemulihan. Password baru harus 4–12 karakter. Isi server, port, email pengirim, dan mode SMTP, lalu aktifkan SMTP. Gunakan **STARTTLS** atau **SSL/TLS** untuk SMTP dengan autentikasi. Mode **None** mendukung relay tanpa autentikasi.
 
 Setelah menyimpan konfigurasi, klik **Tes SMTP** untuk mengirim email tes ke alamat pemulihan.
 
@@ -72,8 +72,8 @@ Gunakan **Lupa password** di halaman login dan masukkan email pemulihan yang ter
 | **Monitor** | QPS, cache, latensi, CPU, RAM, disk, dan RX/TX. Dashboard diperbarui per detik dengan riwayat 10 menit. |
 | **Unbound** | Cek, simpan, reload, start/stop, root hints, DNSSEC, dan sertifikat TLS remote-control. Perubahan konfigurasi yang berhasil disimpan ke file dan database. |
 | **Interface & Reverse DNS** | Baca interface, zona reverse, dan record PTR yang ditulis di bagian `server:` pada `/etc/unbound/unbound.conf`. Loopback hanya bisa dibaca. IP lain bisa diedit per interface. Perubahan IP me-restart Unbound, sementara perubahan zona dan PTR memakai reload saat layanan aktif. Data tersimpan ke database. |
-| **Live Log** | Baca 40 entri journal terakhir dan ikuti log baru. Log query dan reply punya toggle terpisah. **Stop** menghentikan sesi log. |
-| **Cron / Uji DNS** | Lihat status monitoring dan jadwal filter. Jalankan satu pengujian dnsperf sekaligus ke IPv4 privat atau loopback, maksimal 16 client, 4 thread, dan 1.000 QPS. |
+| **Log langsung** | Baca 40 entri journal terakhir dan ikuti log baru. Pencatatan kueri dan jawaban diatur terpisah. Gunakan **Hentikan log** untuk menutup sesi. |
+| **Jadwal / Uji DNS** | Lihat status pemantauan dan jadwal filter. Jalankan satu tes dnsperf dalam satu waktu ke IPv4 privat atau loopback, maksimal 16 klien, 4 thread, dan 1.000 QPS. |
 | **Zabbix Agent** | Edit konfigurasi agen atau aktifkan item `unbound.web.metrics` untuk total query, total reply, QPS, dan metrik Linux. Lihat [panduan item dan grafik Zabbix](docs/zabbix.md). |
 | **Firewall** | Kelola rule, status, dan reload UFW. |
 
@@ -84,14 +84,14 @@ Untuk produksi, batasi akses panel ke jaringan admin atau VPN dan izinkan kueri 
 ## Filter DNS
 
 1. Tambahkan URL HTTPS publik di menu **Blocklist & Whitelist**. Isi file dapat berupa daftar domain, hosts, URL, Adblock, CSV, atau JSON. Tambahkan domain pengecualian secara manual atau isi URL whitelist.
-2. Pilih **Masukkan Blocklist ke konfigurasi** atau **Masukkan Whitelist ke konfigurasi**. Tombol memasang include di dalam `server:` pada `/etc/unbound/unbound.conf`:
+2. Pilih **Aktifkan Blocklist** atau **Aktifkan Whitelist**. Tombol memasang include di dalam `server:` pada `/etc/unbound/unbound.conf`:
 
 ```conf
     include: "/etc/unbound/blocklist/blocklist.conf"
     include: "/etc/unbound/blocklist/whitelist.conf"
 ```
 
-3. Setelah include aktif, tombol berubah untuk menghapus include dan menonaktifkan filter terkait. Konfigurasi dan pengaturan dicatat ke database. Sinkronisasi berjalan pukul 03.15 waktu server. Gunakan **Update & Apply Now** untuk sinkronisasi langsung.
+3. Setelah include aktif, tombol berubah untuk menghapus include dan menonaktifkan filter terkait. Konfigurasi dan pengaturan dicatat ke database. Sinkronisasi berjalan pukul 03.15 waktu server. Gunakan **Sinkronkan sekarang** untuk sinkronisasi langsung.
 
 Salin URL sumber yang ingin dipakai ke kolom filter terkait.
 

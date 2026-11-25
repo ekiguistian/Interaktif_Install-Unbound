@@ -25,7 +25,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             error_log('Unbound Web OTP: permintaan pemulihan gagal.');
         }
         $_SESSION['recovery_step'] = true;
-        $_SESSION['recovery_notice'] = 'Jika email terdaftar dan SMTP aktif, kode OTP akan dikirim.';
+        $_SESSION['recovery_notice'] = 'Jika alamat cocok dengan email pemulihan dan SMTP aktif, kami akan mengirim kode OTP.';
         session_write_close();
         header('Location: /forgot-password', true, 303);
         if (function_exists('fastcgi_finish_request')) {
@@ -42,9 +42,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     } elseif ($action === 'reset') {
         $password = form_string($_POST, 'new_password');
-        if (!valid_panel_password($password) || $password !== form_string($_POST, 'confirm_password')) {
-            $error = 'Password baru harus 12–128 byte dan cocok dengan konfirmasi.';
-        } else {
+        $error = panel_password_error($password, form_string($_POST, 'confirm_password')) ?? '';
+        if ($error === '') {
             try {
                 if (redeem_panel_otp(db(), form_string($_SESSION, 'recovery_challenge'), trim(form_string($_POST, 'otp')),
                     $password, panel_secret_key(), time())) {
@@ -87,19 +86,14 @@ page_start('Pemulihan password', false, 'login');
       <form method="post" class="mt-6 space-y-4">
         <input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>">
         <input type="hidden" name="action" value="reset">
-        <label class="block">Kode OTP
-          <input class="form-input" name="otp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{8}" maxlength="8" required>
+        <label class="block">Kode OTP dari email
+          <input class="form-input" name="otp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{8}" maxlength="8" placeholder="8 digit" required>
         </label>
-        <label class="block">Password baru
-          <input class="form-input" name="new_password" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>
-        </label>
-        <label class="block">Ulangi password baru
-          <input class="form-input" name="confirm_password" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>
-        </label>
-        <button class="btn-primary" type="submit">Reset password</button>
+        <?php panel_password_fields(); ?>
+        <button class="btn-primary" type="submit">Simpan password baru</button>
       </form>
     <?php endif; ?>
-    <a class="mt-4 block text-sm text-cyan-300" href="/login">Kembali ke login</a>
+    <a class="mt-4 block text-sm text-cyan-300" href="/login">Kembali ke halaman masuk</a>
   </section>
 </div>
 <?php page_end(); ?>

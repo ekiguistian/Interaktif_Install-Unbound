@@ -6,9 +6,9 @@ page_start('Ringkasan server', true);
 ?>
 <section class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
   <?php
-  card('Unbound','fa-server','Restart, reload, statistik, dan editor file resolver.','/settings/unbound');
-  card('Zabbix Agent','fa-chart-line','Edit file agent yang terpasang dan muat ulang layanannya.','/settings/zabbix');
-  card('Firewall','fa-fire','Atur status UFW dan kelola aturan Allow atau Deny untuk trafik IN dan OUT.','/settings/firewall');
+  card('Unbound','fa-server','Kelola layanan, periksa statistik, dan ubah konfigurasi Unbound.','/settings/unbound');
+  card('Zabbix Agent','fa-chart-line','Atur konfigurasi agen dan ekspor statistik ke Zabbix.','/settings/zabbix');
+  card('Firewall','fa-fire','Kelola UFW serta aturan trafik masuk dan keluar.','/settings/firewall');
   ?>
 </section>
 <?php page_end(); ?>

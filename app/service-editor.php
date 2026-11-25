@@ -10,8 +10,8 @@ if ($service === 'zabbix' && $config !== null) require __DIR__ . '/zabbix-metric
 if ($config === null) { notice(trim($result['output']), 'error'); } else {
     if ($service === 'unbound' && isset($config['network'])) require __DIR__ . '/unbound-network.php';
 ?>
-<form class="panel p-5 space-y-4" data-api="config-save" data-confirm="Simpan file dan muat ulang layanan?">
-  <label for="config" class="block font-mono"><?=e($config['path'])?></label>
+<form class="panel p-5 space-y-4" data-api="config-save" data-confirm="Simpan konfigurasi dan muat ulang layanan?">
+  <label for="config" class="block">File konfigurasi <code class="font-mono"><?=e($config['path'])?></code></label>
   <input type="hidden" name="service" value="<?=e($service)?>">
   <input type="hidden" name="revision" value="<?=e($config['revision'])?>">
   <textarea id="config" class="form-textarea font-mono text-sm" rows="22" name="content" spellcheck="false" wrap="off" required>

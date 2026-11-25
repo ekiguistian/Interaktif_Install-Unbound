@@ -130,7 +130,7 @@ try {
             $save->execute(['whitelist_url', $url]);
             $save->execute(['blocklist_redirect_ip', $redirect]);
             $pdo->commit();
-            json_response(['ok'=>true, 'message'=>'Pengaturan disimpan. Jalankan Update & Apply Now untuk menerapkan.']);
+            json_response(['ok'=>true, 'message'=>'Pengaturan tersimpan. Klik Sinkronkan sekarang untuk menerapkannya.']);
 
         case 'blocklist-add':
             $name = trim((string)($payload['name'] ?? ''));
@@ -139,7 +139,7 @@ try {
             if (!valid_public_https_url($url)) fail_validation('Masukkan URL HTTPS dengan hostname publik yang dapat di-resolve.');
             $stmt = $pdo->prepare('INSERT INTO blocklists (name,url,is_active) VALUES (?,?,1)');
             $stmt->execute([$name,$url]);
-            json_response(['ok' => true, 'message' => 'Sumber blocklist ditambahkan. Jalankan Update & Apply Now untuk memuatnya.']);
+            json_response(['ok' => true, 'message' => 'Sumber blocklist ditambahkan. Klik Sinkronkan sekarang untuk memuatnya.']);
 
         case 'blocklist-delete':
             $id = filter_var($payload['id'] ?? null, FILTER_VALIDATE_INT);

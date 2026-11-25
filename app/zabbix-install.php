@@ -10,14 +10,14 @@ $repository = $repositories[$agent['architecture']] ?? null;
 <section class="panel p-5 mb-5">
   <h2 class="font-semibold">Zabbix Agent belum terpasang</h2>
   <?php if ($agent['jammy'] && $repository !== null): ?>
-  <p class="mt-2 text-sm text-slate-400">Jalankan di terminal server untuk memasang Zabbix Agent 2 7.0 LTS di Ubuntu 22.04.</p>
+  <p class="mt-2 text-sm text-slate-400">Di Ubuntu 22.04, jalankan perintah ini untuk memasang Zabbix Agent 2 7.0 LTS.</p>
   <pre class="command-block">curl -fLO 'https://repo.zabbix.com/zabbix/7.0/<?=e($repository)?>/pool/main/z/zabbix-release/zabbix-release_latest_7.0+ubuntu22.04_all.deb'
 sudo dpkg -i 'zabbix-release_latest_7.0+ubuntu22.04_all.deb'
 sudo apt update
 sudo apt install -y zabbix-agent2
 sudo systemctl enable --now zabbix-agent2
 sudo systemctl restart php8.4-fpm</pre>
-  <p class="text-sm text-slate-400">Restart PHP-FPM memberi panel akses ke direktori konfigurasi yang baru dibuat. Muat ulang halaman ini, lalu isi alamat server Zabbix lewat editor.</p>
+  <p class="text-sm text-slate-400">Setelah instalasi selesai, muat ulang halaman dan isi alamat server Zabbix di editor konfigurasi.</p>
   <?php else: ?>
   <p class="mt-2 text-sm text-slate-400">Pilih paket Zabbix Agent sesuai sistem operasi dan arsitektur server di panduan resmi.</p>
   <?php endif; ?>

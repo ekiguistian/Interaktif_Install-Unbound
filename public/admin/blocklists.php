@@ -9,18 +9,18 @@ $sources=db()->query('SELECT id,name,url,is_active,domain_count,last_updated,las
 $whitelist=db()->query('SELECT id,domain,note,created_at FROM whitelists ORDER BY domain')->fetchAll();
 $state = manage(['filters-state']);
 $flags = $state['code'] === 0 ? json_decode($state['output'], true) : null;
-page_start('Blocklist & whitelist',true);
+page_start('Blocklist & Whitelist',true);
 ?>
 <section class="panel mb-5 p-5 sm:p-6">
-  <h2 class="font-semibold">Autoupdate filter DNS</h2>
-  <p class="mt-2 text-sm text-slate-400">Gunakan tombol masing-masing filter untuk mengatur include di bagian <code>server:</code> pada <code>/etc/unbound/unbound.conf</code>.</p>
+  <h2 class="font-semibold">Pengaturan filter DNS</h2>
+  <p class="mt-2 text-sm text-slate-400">Aktifkan atau nonaktifkan masing-masing filter di bagian sinkronisasi.</p>
   <form class="mt-5 filter-options" data-api="filter-options-save">
-    <label><span class="mb-2 block text-sm">URL whitelist otomatis</span><input class="form-input" name="whitelist_url" type="url" maxlength="2048" value="<?=e($options['whitelist_url'])?>" placeholder="https://yourdomain.com/whitelist.txt"><span class="mt-1 block text-xs text-slate-500">Kosongkan untuk memakai whitelist manual saja.</span></label>
+    <label><span class="mb-2 block text-sm">URL sumber whitelist</span><input class="form-input" name="whitelist_url" type="url" maxlength="2048" value="<?=e($options['whitelist_url'])?>" placeholder="https://contoh.net/whitelist.txt"><span class="mt-1 block text-xs text-slate-500">Kosongkan jika hanya memakai whitelist manual.</span></label>
     <label><span class="mb-2 block text-sm">IP redirect</span><input class="form-input" name="redirect_ip" value="<?=e($options['redirect_ip'])?>" required></label>
     <button class="btn-secondary" type="submit">Simpan pengaturan</button><p data-result class="text-sm text-cyan-200"></p>
   </form>
   <?php if (is_array($summary)): ?>
-  <p class="mt-5 text-xs text-slate-400">Sinkronisasi berhasil terakhir: <?=e($summary['updated_at']??'—')?></p>
+  <p class="mt-5 text-xs text-slate-400">Terakhir disinkronkan <?=e($summary['updated_at']??'—')?></p>
   <dl class="mt-3 filter-summary text-sm">
     <?php foreach (['raw'=>'Domain diproses','normalized'=>'Domain unik','whitelist'=>'Whitelist gabungan','removed'=>'Dikecualikan','final'=>'Domain diblokir'] as $key=>$label): ?>
     <div class="rounded-xl border border-slate-800 p-3"><dt class="text-slate-400"><?=e($label)?></dt><dd class="mt-1 text-lg font-semibold"><?=number_format((int)($summary[$key]??0),0,',','.')?></dd></div>
@@ -30,9 +30,9 @@ page_start('Blocklist & whitelist',true);
 </section>
 <div class="grid gap-5 xl:grid-cols-2">
   <section class="panel p-5 sm:p-6">
-    <h2 class="font-semibold">Sumber blocklist</h2><p class="mt-1 text-sm leading-6 text-slate-400">Tambahkan URL HTTPS publik. Ekstensi file bebas selama isinya daftar domain, hosts, URL, Adblock <code>||domain^</code>, CSV, atau JSON.</p>
-    <form class="mt-5 grid gap-3 sm:grid-cols-2" data-api="blocklist-add"><input class="form-input" name="name" maxlength="120" placeholder="Nama sumber" required><input class="form-input sm:col-span-2" name="url" type="url" placeholder="https://yourdomain.com/blocklist.txt" required><button class="btn-primary sm:col-span-2 sm:w-fit" type="submit"><i class="fa-solid fa-plus"></i>Tambah sumber</button><p data-result class="text-sm text-cyan-200 sm:col-span-2"></p></form>
-    <div class="mt-5 overflow-x-auto"><table class="w-full min-w-[42rem] text-left text-sm"><thead class="text-xs uppercase text-slate-500"><tr><th class="py-3">Sumber</th><th>Domain</th><th>Terakhir update</th><th></th></tr></thead><tbody class="divide-y divide-slate-800">
+    <h2 class="font-semibold">Sumber blocklist</h2><p class="mt-1 text-sm leading-6 text-slate-400">Tambahkan URL HTTPS publik. Format yang didukung meliputi daftar domain, hosts, URL, Adblock, CSV, dan JSON.</p>
+    <form class="mt-5 grid gap-3 sm:grid-cols-2" data-api="blocklist-add"><input class="form-input" name="name" maxlength="120" placeholder="Contoh Daftar domain spam" aria-label="Nama sumber" required><input class="form-input sm:col-span-2" name="url" type="url" aria-label="URL sumber blocklist" placeholder="https://contoh.net/blocklist.txt" required><button class="btn-primary sm:col-span-2 sm:w-fit" type="submit"><i class="fa-solid fa-plus"></i>Tambah sumber</button><p data-result class="text-sm text-cyan-200 sm:col-span-2"></p></form>
+    <div class="mt-5 overflow-x-auto"><table class="w-full min-w-[42rem] text-left text-sm"><thead class="text-xs uppercase text-slate-500"><tr><th class="py-3">Sumber</th><th>Domain</th><th>Terakhir disinkronkan</th><th></th></tr></thead><tbody class="divide-y divide-slate-800">
       <?php foreach($sources as $source): ?><tr><td class="py-3 pr-3"><form class="min-w-72 space-y-2" data-api="blocklist-update"><input type="hidden" name="id" value="<?=e($source['id'])?>"><input class="form-input" name="name" maxlength="120" value="<?=e($source['name'])?>" required><input class="form-input" name="url" type="url" value="<?=e($source['url'])?>" required><select class="form-select" name="is_active"><option value="1" <?=$source['is_active']?'selected':''?>>Aktif</option><option value="0" <?=!$source['is_active']?'selected':''?>>Nonaktif</option></select><button class="btn-secondary" type="submit"><i class="fa-solid fa-floppy-disk"></i>Simpan sumber</button><p data-result class="text-xs text-cyan-200"></p></form><?php if($source['last_error']): ?><div class="mt-1 text-xs text-rose-300"><?=e($source['last_error'])?></div><?php endif; ?></td><td><?=number_format((int)$source['domain_count'],0,',','.')?></td><td class="text-xs text-slate-400"><?=e($source['last_updated']??'Belum pernah')?></td><td><form data-api="blocklist-delete"><input type="hidden" name="id" value="<?=e($source['id'])?>"><button class="btn-danger" type="submit"><i class="fa-solid fa-trash"></i>Hapus</button></form></td></tr><?php endforeach; ?>
       <?php if(!$sources): ?><tr><td colspan="4" class="py-6 text-center text-slate-500">Belum ada sumber blocklist.</td></tr><?php endif; ?>
     </tbody></table></div>
@@ -40,7 +40,7 @@ page_start('Blocklist & whitelist',true);
 
   <section class="panel p-5 sm:p-6">
     <h2 class="font-semibold">Whitelist manual</h2><p class="mt-1 text-sm leading-6 text-slate-400">Pengecualian domain dan subdomain.</p>
-    <form class="mt-5 grid gap-3 sm:grid-cols-2" data-api="whitelist-add"><input class="form-input" name="domain" placeholder="yourdomain.com" required><input class="form-input" name="note" maxlength="255" placeholder="Catatan (opsional)"><button class="btn-primary sm:w-fit" type="submit"><i class="fa-solid fa-plus"></i>Tambah domain</button><p data-result class="text-sm text-cyan-200 sm:col-span-2"></p></form>
+    <form class="mt-5 grid gap-3 sm:grid-cols-2" data-api="whitelist-add"><input class="form-input" name="domain" placeholder="contoh.net" aria-label="Domain pengecualian" required><input class="form-input" name="note" maxlength="255" placeholder="Catatan (opsional)" aria-label="Catatan"><button class="btn-primary sm:w-fit" type="submit"><i class="fa-solid fa-plus"></i>Tambah domain</button><p data-result class="text-sm text-cyan-200 sm:col-span-2"></p></form>
     <div class="mt-5 space-y-2">
       <?php foreach($whitelist as $item): ?><div class="rounded-xl border border-slate-800 bg-slate-900/60 p-3"><form class="flex flex-wrap items-end gap-2" data-api="whitelist-update"><input type="hidden" name="id" value="<?=e($item['id'])?>"><label class="min-w-44 flex-1"><span class="mb-1 block text-xs text-slate-500">Domain</span><input class="form-input" name="domain" value="<?=e($item['domain'])?>" required></label><label class="min-w-36 flex-1"><span class="mb-1 block text-xs text-slate-500">Catatan</span><input class="form-input" name="note" value="<?=e($item['note'])?>"></label><button class="btn-secondary" type="submit"><i class="fa-solid fa-floppy-disk"></i>Simpan</button></form><form class="mt-2" data-api="whitelist-delete"><input type="hidden" name="id" value="<?=e($item['id'])?>"><button class="btn-danger" type="submit"><i class="fa-solid fa-trash"></i>Hapus</button><span data-result class="ml-2 text-xs text-cyan-200"></span></form></div><?php endforeach; ?>
       <?php if(!$whitelist): ?><p class="py-5 text-center text-sm text-slate-500">Belum ada domain whitelist.</p><?php endif; ?>
@@ -48,10 +48,10 @@ page_start('Blocklist & whitelist',true);
   </section>
 </div>
 <section class="panel mt-5 p-5 sm:p-6">
-  <div class="grid gap-5 lg:grid-cols-[1fr_auto] lg:items-center"><div><h2 class="font-semibold">Sinkronisasi & jadwal otomatis</h2><p class="mt-1 text-sm leading-6 text-slate-400">Update otomatis pukul 03.15 waktu server.</p></div>
-    <form data-stream="blocklist-sync" data-output="#blocklist-output"><button class="btn-primary" type="submit"><i class="fa-solid fa-cloud-arrow-down"></i>Update & Apply Now</button></form>
+  <div class="grid gap-5 lg:grid-cols-[1fr_auto] lg:items-center"><div><h2 class="font-semibold">Sinkronisasi filter</h2><p class="mt-1 text-sm leading-6 text-slate-400">Filter aktif disinkronkan setiap hari pukul 03.15 waktu server.</p></div>
+    <form data-stream="blocklist-sync" data-output="#blocklist-output"><button class="btn-primary" type="submit"><i class="fa-solid fa-cloud-arrow-down"></i>Sinkronkan sekarang</button></form>
   </div>
-  <pre id="blocklist-output" class="mt-4 max-h-72 overflow-auto rounded-xl border border-slate-700 bg-black/50 p-4 font-mono text-xs leading-6 text-emerald-200">Siap menjalankan sinkronisasi.</pre>
+  <pre id="blocklist-output" class="mt-4 max-h-72 overflow-auto rounded-xl border border-slate-700 bg-black/50 p-4 font-mono text-xs leading-6 text-emerald-200">Hasil sinkronisasi akan muncul di sini.</pre>
   <?php if ($flags === null) { notice($state['output'], 'error'); } else { ?>
   <div class="mt-5 flex flex-wrap gap-4">
     <?php foreach (['block' => 'Blocklist', 'white' => 'Whitelist'] as $key => $label): ?>
@@ -59,7 +59,7 @@ page_start('Blocklist & whitelist',true);
     <form data-api="filter-toggle" data-output="#filter-change-result">
       <input type="hidden" name="filter" value="<?=e($key)?>">
       <input type="hidden" name="enabled" value="<?=$included ? '0' : '1'?>">
-      <button class="btn-secondary" type="submit"><?=e($included ? "Nonaktifkan $label dan hapus include" : "Masukkan $label ke konfigurasi")?></button>
+      <button class="btn-secondary" type="submit"><?=e($included ? "Nonaktifkan $label" : "Aktifkan $label")?></button>
     </form>
     <?php endforeach; ?>
   </div><p id="filter-change-result" class="mt-3" role="status"></p><?php } ?>

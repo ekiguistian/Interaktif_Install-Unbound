@@ -4,13 +4,13 @@ declare(strict_types=1);
 <section class="panel p-5 space-y-4" aria-labelledby="unbound-network">
   <h2 id="unbound-network" class="font-semibold">Interface &amp; Reverse DNS</h2>
   <?php if (!empty($config['network_sync_failed'])): ?>
-    <p role="status">Snapshot jaringan belum tersimpan ke database. Muat ulang halaman untuk mencoba lagi.</p>
+    <p role="status">Data jaringan belum tersimpan ke database. Muat ulang halaman untuk mencoba lagi.</p>
   <?php endif; ?>
   <?php foreach (['interface' => 'Interface DNS', 'local-zone' => 'Zona reverse', 'local-data' => 'Record PTR'] as $kind => $label): ?>
     <div class="space-y-2">
       <h3 class="font-medium"><?=e($label)?></h3>
       <?php if (!$config['network'][$kind]): ?>
-        <p class="text-sm">Belum ada di file konfigurasi utama.</p>
+        <p class="text-sm">Belum diatur di file konfigurasi utama.</p>
       <?php endif; ?>
       <?php foreach ($config['network'][$kind] as $row): ?>
         <?php if (!$row['editable']): ?>
@@ -18,12 +18,12 @@ declare(strict_types=1);
           <?php continue; ?>
         <?php endif; ?>
         <form class="space-y-2" data-api="unbound-network-save"
-          data-confirm="<?= $kind === 'interface' ? 'Simpan IP dan restart Unbound jika layanan aktif?' : 'Simpan perubahan dan muat ulang Unbound jika layanan aktif?' ?>">
+          data-confirm="<?= $kind === 'interface' ? 'Simpan IP dan mulai ulang Unbound jika layanan aktif?' : 'Simpan perubahan dan muat ulang Unbound jika layanan aktif?' ?>">
           <input type="hidden" name="kind" value="<?=e($kind)?>">
           <input type="hidden" name="line" value="<?=e((string)$row['line'])?>">
           <input type="hidden" name="revision" value="<?=e($config['revision'])?>">
           <label class="block text-sm">
-            <?= $kind === 'interface' ? 'Alamat IP' : ($kind === 'local-zone' ? 'Nama zona' : 'Nama reverse PTR') ?>
+            <?= $kind === 'interface' ? 'Alamat IP' : ($kind === 'local-zone' ? 'Nama zona' : 'Nama reverse untuk PTR') ?>
             <input class="form-input font-mono" name="value" value="<?=e($kind === 'interface' ? $row['address'] : $row['name'])?>" maxlength="254" required spellcheck="false">
           </label>
           <?php if ($kind === 'interface' && $row['port'] !== ''): ?>

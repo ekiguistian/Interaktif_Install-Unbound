@@ -4,6 +4,7 @@ declare(strict_types=1);
 const RECOVERY_OTP_TTL = 600;
 const RECOVERY_OTP_RESEND = 60;
 const RECOVERY_OTP_ATTEMPTS = 5;
+const PANEL_PASSWORD_PATTERN = '[^\p{Cc}\p{Zl}\p{Zp}]{4,12}';
 
 function form_string(array $form, string $name): string
 {
@@ -18,8 +19,16 @@ function valid_recovery_email(string $email): bool
 
 function valid_panel_password(string $password): bool
 {
-    return strlen($password) >= 12 && strlen($password) <= 128 && trim($password) !== ''
-        && strpbrk($password, "\0\r\n") === false;
+    return preg_match('/\A' . PANEL_PASSWORD_PATTERN . '\z/u', $password) === 1
+        && preg_match('/[^\p{Z}]/u', $password) === 1;
+}
+
+function panel_password_error(string $password, string $confirmation): ?string
+{
+    if (!valid_panel_password($password)) {
+        return 'Gunakan 4–12 karakter untuk password baru.';
+    }
+    return $password === $confirmation ? null : 'Konfirmasi password belum cocok.';
 }
 
 function panel_password_hash(string $password): string
@@ -79,13 +88,17 @@ function change_panel_account(PDO $pdo, array $form): string
     if ($email !== '' && !valid_recovery_email($email)) {
         throw new DomainException('Masukkan email pemulihan yang valid.');
     }
-    if ($password !== '' && (!valid_panel_password($password) || $password !== form_string($form, 'confirm_password'))) {
-        throw new DomainException('Password baru harus 12–128 byte dan cocok dengan konfirmasi.');
+    $confirmation = form_string($form, 'confirm_password');
+    if ($password !== '' || $confirmation !== '') {
+        $error = panel_password_error($password, $confirmation);
+        if ($error !== null) {
+            throw new DomainException($error);
+        }
     }
     return with_panel_account($pdo, function (array $account) use ($pdo, $form, $username, $email, $password): string {
         require_current_password($account, form_string($form, 'current_password'));
         if ($username !== $account['username'] && !preg_match('/^[a-zA-Z0-9][a-zA-Z0-9_.@-]{0,63}$/D', $username)) {
-            throw new DomainException('Gunakan 1–64 karakter untuk username, berupa huruf, angka, atau . _ @ -.');
+            throw new DomainException('Nama pengguna harus 1–64 karakter. Gunakan huruf, angka, atau tanda . _ @ -.');
         }
         $version = bin2hex(random_bytes(32));
         $pdo->prepare('UPDATE panel_account SET username=?, password_hash=?, recovery_email=?, session_version=? WHERE id=1')

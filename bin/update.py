@@ -90,7 +90,7 @@ def remote_version(commit):
         git("init", "--quiet", "--bare", "--initial-branch=main", str(history))
     git("-C", str(history), "fetch", "--no-tags", "--", REPOSITORY, "refs/heads/main", timeout=16)
     if git("-C", str(history), "rev-parse", "FETCH_HEAD") != commit:
-        raise ValueError("Branch main berubah. Jalankan Check for update lagi.")
+        raise ValueError("Branch main berubah. Klik Cek pembaruan lagi.")
     return version_for(history, commit)
 
 
@@ -116,7 +116,7 @@ def install(commit, version):
         publish("cloning", commit, "Mengambil branch main dari GitHub.", version)
         git("clone", "--no-tags", "--single-branch", "--branch=main", "--", REPOSITORY, str(source), timeout=120)
         if git("-C", str(source), "rev-parse", "HEAD") != commit or version_for(source, commit) != version:
-            raise ValueError("Branch main berubah. Jalankan Check for update lagi.")
+            raise ValueError("Branch main berubah. Klik Cek pembaruan lagi.")
         installer = source / "update.sh"
         if installer.is_symlink() or not installer.is_file():
             raise ValueError("update.sh tidak ditemukan di commit yang dipilih.")
@@ -151,7 +151,7 @@ def main(action, expected=""):
             check()
         elif action == "queue":
             if state["phase"] != "available" or not REF.fullmatch(expected) or state["commit"] != expected:
-                raise ValueError("Jalankan Check for update terlebih dahulu.")
+                raise ValueError("Klik Cek pembaruan terlebih dahulu.")
             publish("queued", state["commit"], "Pembaruan dijadwalkan.", state.get("version", ""))
             try:
                 subprocess.run(["/usr/bin/systemctl", "start", "--no-block", "unbound-web-update"], check=True, timeout=10)

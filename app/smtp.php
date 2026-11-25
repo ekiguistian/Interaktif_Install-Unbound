@@ -54,16 +54,16 @@ function save_panel_smtp(PDO $pdo, array $form): void
         throw new DomainException('Masukkan hostname atau IP server SMTP yang valid.');
     }
     if (($sender !== '' || $enabled) && !valid_recovery_email($sender)) {
-        throw new DomainException('Masukkan alamat email sender yang valid.');
+        throw new DomainException('Masukkan alamat email pengirim yang valid.');
     }
     if (!preg_match('/^[\x20-\x7e]{0,254}$/D', $username) || !preg_match('/^[\x20-\x7e]{0,512}$/D', $password)) {
-        throw new DomainException('Username atau password SMTP tidak valid.');
+        throw new DomainException('Nama pengguna atau password SMTP tidak valid.');
     }
     if ($encryption === 'none' && ($username !== '' || $password !== '')) {
         throw new DomainException('Gunakan STARTTLS atau SSL/TLS untuk autentikasi SMTP.');
     }
     if ($username === '' && $password !== '') {
-        throw new DomainException('Isi username SMTP untuk menggunakan password SMTP.');
+        throw new DomainException('Isi nama pengguna SMTP jika memakai password SMTP.');
     }
 
     with_panel_account($pdo, function (array $account) use ($pdo, $form, $enabled, $encryption, $host, $port, $username, $sender, $password): void {
@@ -76,7 +76,7 @@ function save_panel_smtp(PDO $pdo, array $form): void
             $encrypted = $password !== '' ? encrypt_smtp_password($password, panel_secret_key())
                 : ($sameServer ? $old['encrypted_password'] : null);
             if ($enabled && $encrypted === null) {
-                throw new DomainException('Isi password SMTP untuk server dan username ini.');
+                throw new DomainException('Isi password SMTP untuk server dan nama pengguna ini.');
             }
         }
         $pdo->exec('DELETE FROM panel_smtp WHERE id=1');

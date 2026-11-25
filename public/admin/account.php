@@ -57,18 +57,13 @@ if ($error !== '') notice($error, 'error');
     <h2 class="font-semibold">Profil dan password</h2>
     <input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>">
     <input type="hidden" name="action" value="account">
-    <label class="block">Username
+    <label class="block">Nama pengguna
       <input class="form-input" name="username" value="<?=e($account['username'])?>" autocomplete="username" maxlength="255" required>
     </label>
     <label class="block">Email pemulihan
       <input class="form-input" name="recovery_email" value="<?=e($account['recovery_email'])?>" type="email" autocomplete="email" maxlength="254">
     </label>
-    <label class="block">Password baru
-      <input class="form-input" name="new_password" type="password" autocomplete="new-password" minlength="12" maxlength="128">
-    </label>
-    <label class="block">Ulangi password baru
-      <input class="form-input" name="confirm_password" type="password" autocomplete="new-password" minlength="12" maxlength="128">
-    </label>
+    <?php panel_password_fields(false); ?>
     <label class="block">Password panel saat ini
       <input class="form-input" name="current_password" type="password" autocomplete="current-password" required>
     </label>
@@ -83,7 +78,7 @@ if ($error !== '') notice($error, 'error');
         <input type="checkbox" role="switch" name="enabled" value="1" <?= $smtp['enabled'] ? 'checked' : '' ?>>
         Aktifkan SMTP
       </label>
-      <?php field('Host SMTP', 'host', $smtp['host'], required: false); ?>
+      <?php field('Server SMTP', 'host', $smtp['host'], required: false); ?>
       <label class="block">Keamanan koneksi
         <select class="form-select" name="encryption">
           <?php foreach (['starttls' => 'STARTTLS', 'ssl' => 'SSL/TLS', 'none' => 'None'] as $value => $label): ?>
@@ -94,8 +89,8 @@ if ($error !== '') notice($error, 'error');
       <label class="block">Port
         <input class="form-input" name="port" type="number" min="1" max="65535" value="<?=e($smtp['port'])?>" required>
       </label>
-      <?php field('Username SMTP', 'smtp_username', $smtp['username'], hint: 'Kosongkan untuk relay tanpa autentikasi.', required: false); ?>
-      <?php field('Email sender', 'sender', $smtp['sender'], 'email', required: false); ?>
+      <?php field('Nama pengguna SMTP', 'smtp_username', $smtp['username'], hint: 'Kosongkan untuk relay tanpa autentikasi.', required: false); ?>
+      <?php field('Email pengirim', 'sender', $smtp['sender'], 'email', required: false); ?>
       <label class="block">Password SMTP
         <input class="form-input" name="smtp_password" type="password" autocomplete="new-password" maxlength="512"
           <?= $smtp['encrypted_password'] !== null ? 'placeholder="Kosongkan untuk memakai password tersimpan"' : '' ?>>
@@ -109,7 +104,7 @@ if ($error !== '') notice($error, 'error');
       <input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>">
       <input type="hidden" name="action" value="smtp-test">
       <button class="btn-secondary" type="submit">Tes SMTP</button>
-      <p class="text-sm">Kirim email tes ke alamat pemulihan dengan konfigurasi yang tersimpan.</p>
+      <p class="text-sm">Email tes dikirim ke alamat pemulihan memakai pengaturan yang tersimpan.</p>
     </form>
   </section>
 </div>
