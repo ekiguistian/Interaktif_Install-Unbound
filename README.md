@@ -42,6 +42,8 @@ Jika pesan `503` masih muncul, tunggu beberapa menit lalu ulangi perintah yang s
 
 ## Update dari main
 
+Versi rilis dimulai dari **1.0.30**. Setiap commit baru pada jalur utama `main` menambah angka terakhir satu kali. Panel menampilkan versi dan hash commit lengkap. Gunakan clone dengan riwayat lengkap untuk menghitung versi.
+
 Setelah memasang versi ini, buka **Pembaruan → Check for update**, cek commit yang tampil, lalu pilih **Pasang pembaruan**. Panel mengambil checkout `main` dari repo GitHub proyek ke `/opt/www/unbound-web/.updates/` dan menjalankan `install.sh` melalui systemd. Status tetap tersedia setelah PHP-FPM dimulai ulang. Untuk melihat kegagalan, jalankan `sudo journalctl -u unbound-web-update -n 50`.
 
 Untuk memasang versi ini pertama kali atau memperbarui lewat terminal:

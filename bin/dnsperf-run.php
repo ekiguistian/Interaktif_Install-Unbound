@@ -14,10 +14,14 @@ $threads = $argv[5];
 $qps = $argv[6];
 if (!valid_private_ipv4($target) || !ctype_digit($port) || (int)$port < 1 || (int)$port > 65535 ||
     !ctype_digit($duration) || (int)$duration < 1 || (int)$duration > 300 ||
-    !preg_match('/^[1-9][0-9]{0,8}$/', $clients) || !preg_match('/^[1-9][0-9]{0,8}$/', $threads) ||
-    ($qps !== '0' && !preg_match('/^[1-9][0-9]{0,8}$/', $qps))) {
-    fwrite(STDERR, "Parameter dnsperf tidak valid. Target harus IP private/loopback dan durasi maksimum 300 detik.\n");
+    !valid_dnsperf_load($clients, $threads, $qps)) {
+    fwrite(STDERR, "Batas dnsperf: target private atau loopback, 300 detik, 16 client, 4 thread, dan 1.000 QPS.\n");
     exit(2);
+}
+$lock = fopen('/var/lib/unbound-web/dnsperf.lock', 'c');
+if ($lock === false || !flock($lock, LOCK_EX | LOCK_NB)) {
+    fwrite(STDERR, "Pengujian dnsperf lain sedang berjalan.\n");
+    exit(1);
 }
 
 $file = null;
@@ -91,14 +95,10 @@ try {
     if (!$size) {
         throw new RuntimeException('Tidak ada domain pengujian yang valid.');
     }
-    echo "Target: $target:$port | Durasi: $duration detik | Client: $clients | Thread: $threads | QPS limit: " . ($qps === '0' ? 'tanpa batas' : $qps) . "\n";
+    echo "Target: $target:$port | Durasi: $duration detik | Client: $clients | Thread: $threads | QPS limit: $qps\n";
     echo 'Jumlah query domain: ' . count($rows) . "\n\n";
     flush();
-    $args = ['/usr/bin/dnsperf', '-f', 'inet', '-s', $target, '-p', $port, '-d', $file, '-l', $duration, '-c', $clients, '-T', $threads, '-S', '2'];
-    if ($qps !== '0') {
-        $args[] = '-Q';
-        $args[] = $qps;
-    }
+    $args = ['/usr/bin/dnsperf', '-f', 'inet', '-s', $target, '-p', $port, '-d', $file, '-l', $duration, '-c', $clients, '-T', $threads, '-S', '2', '-Q', $qps];
     $exitCode = streamDnsperf($args);
 } catch (Throwable $error) {
     fwrite(STDERR, $error->getMessage() . "\n");

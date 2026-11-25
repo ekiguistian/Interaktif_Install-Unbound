@@ -18,11 +18,10 @@ switch ($task) {
     case 'dnsperf':
         $target=trim((string)($payload['target']??'')); $port=filter_var($payload['port']??null,FILTER_VALIDATE_INT);
         $duration=filter_var($payload['duration']??null,FILTER_VALIDATE_INT); $clients=(string)($payload['clients']??'');
-        $threads=(string)($payload['threads']??''); $qps=(string)($payload['qps']??'0');
+        $threads=(string)($payload['threads']??''); $qps=(string)($payload['qps']??'');
         if (!valid_private_ipv4($target)) json_response(['ok'=>false,'message'=>'Target dibatasi ke alamat IPv4 private atau loopback.'],422);
         if ($port===false||$port<1||$port>65535||$duration===false||$duration<1||$duration>300||
-            !preg_match('/^[1-9][0-9]{0,8}$/',$clients)||!preg_match('/^[1-9][0-9]{0,8}$/',$threads)||
-            ($qps!=='0'&&!preg_match('/^[1-9][0-9]{0,8}$/',$qps))) json_response(['ok'=>false,'message'=>'Parameter dnsperf tidak valid; durasi maksimum 300 detik.'],422);
+            !valid_dnsperf_load($clients, $threads, $qps)) json_response(['ok'=>false,'message'=>'Batas dnsperf: 300 detik, 16 client, 4 thread, dan 1.000 QPS.'],422);
         $args = ['/usr/bin/php8.4', APP_ROOT . '/bin/dnsperf-run.php'];
         array_push($args,$target,(string)$port,(string)$duration,$clients,$threads,$qps);
         break;

@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import pwd
 import re
 import selectors
 import shlex
@@ -187,7 +188,7 @@ def lock():
 
 def editor(operation, name, revision=None):
     unit, path = service_config(name)
-    path = path.resolve(strict=True)
+    path = trusted_config_path(path, Path("/etc/unbound" if name == "unbound" else "/etc/zabbix"))
     old = path.read_bytes()
     digest = hashlib.sha256(old).hexdigest()
     if operation == "config-read":
@@ -196,8 +197,89 @@ def editor(operation, name, revision=None):
     if revision != digest:
         raise ValueError("File berubah sejak dibuka. Muat ulang sebelum menyimpan.")
     data = sys.stdin.buffer.read(1048577)
+    if not data.strip() or len(data) > 1048576 or b"\x00" in data:
+        raise ValueError("Isi file kosong atau terlalu besar.")
+    validate_web_config(name, data.decode())
     apply_config(unit, path, old, data, after=record_editor_config if unit == "unbound" else None)
     print("File tersimpan dan layanan sudah dimuat ulang.")
+
+
+def trusted_config_path(path, base):
+    """The web editor accepts only root-owned, non-writable configuration paths."""
+    if not path.is_absolute() or not path.is_relative_to(base) or ".." in path.parts:
+        raise ValueError(f"Lokasi konfigurasi harus di dalam {base}.")
+    resolved = path.resolve(strict=True)
+    if not resolved.is_relative_to(base):
+        raise ValueError(f"Target konfigurasi harus di dalam {base}.")
+    for item in set((path, resolved, *path.parents, *resolved.parents)):
+        metadata = item.stat()
+        if metadata.st_uid != 0 or metadata.st_mode & 0o022:
+            raise ValueError("Konfigurasi web hanya memakai file dan direktori milik root.")
+    return resolved
+
+
+def validate_web_config(service, content):
+    base = Path("/etc/unbound" if service == "unbound" else "/etc/zabbix")
+    visited = set()
+    remaining = 8 * 1024 * 1024
+
+    def inspect_include(pattern):
+        option = Path(pattern)
+        if not option.is_absolute() or not option.is_relative_to(base) or ".." in option.parts:
+            raise ValueError(f"Include harus memakai path absolut di dalam {base}.")
+        # Check the directory before expanding, including a wildcard with no matches.
+        wildcard_prefix = re.split(r"[?*\[]", str(option), maxsplit=1)[0]
+        directory = Path(wildcard_prefix) if wildcard_prefix.endswith("/") else Path(wildcard_prefix).parent
+        trusted_config_path(directory, base)
+        for name in sorted(glob.glob(pattern)):
+            source = trusted_config_path(Path(name), base)
+            if source in visited:
+                continue
+            if not source.is_file() or len(visited) >= 128:
+                raise ValueError("Include konfigurasi tidak valid atau melebihi batas editor web.")
+            visited.add(source)
+            if source in map(Path, FILTER_PATHS):
+                # These generated zone files are updated by the panel and can be hundreds of MB.
+                continue
+            with source.open("rb") as stream:
+                data = stream.read(remaining + 1)
+            inspect(data.decode())
+
+    def inspect(body):
+        nonlocal remaining
+        remaining -= len(body.encode())
+        if remaining < 0:
+            raise ValueError("Total ukuran include melebihi batas editor web.")
+        if service == "unbound":
+            lexer = shlex.shlex(body, posix=True, punctuation_chars=":")
+            lexer.whitespace_split = True
+            tokens = list(lexer)
+            for index, key in enumerate(tokens[:-1]):
+                if tokens[index + 1] != ":":
+                    continue
+                key = key.lower()
+                value = tokens[index + 2] if index + 2 < len(tokens) else ""
+                if key in ("include", "include-toplevel"):
+                    inspect_include(value)
+                elif key == "username" and value != "unbound":
+                    raise ValueError("Editor web hanya mendukung akun layanan unbound.")
+                elif key in ("python-script", "dynlib-file") or (key == "module-config" and {"python", "dynlib"} & set(value.split())):
+                    raise ValueError("Modul eksekusi eksternal hanya dapat diatur lewat terminal server.")
+                elif key == "logfile" and value and (not Path(value).is_relative_to(Path("/var/log/unbound")) or ".." in Path(value).parts):
+                    raise ValueError("Gunakan syslog atau file log di /var/log/unbound.")
+        else:
+            for line in body.splitlines():
+                if line.lstrip().startswith("#") or "=" not in line:
+                    continue
+                key, value = (item.strip() for item in line.split("=", 1))
+                if key == "Include":
+                    inspect_include(value)
+                elif key in {"UserParameter", "UserParameterDir", "AllowKey", "EnableRemoteCommands", "UnsafeUserParameters", "LoadModule", "LoadModulePath"} or key.endswith(".System.Path"):
+                    raise ValueError("Opsi eksekusi eksternal Zabbix hanya dapat diatur lewat terminal server.")
+                elif (key == "AllowRoot" and value != "0") or (key == "User" and value != "zabbix"):
+                    raise ValueError("Editor web hanya mendukung akun layanan zabbix.")
+
+    inspect(content)
 
 
 def checked(*args):
@@ -221,8 +303,13 @@ def apply_config(unit, path, old, data, reload=True, after=None, before_reload=N
         if unit == "unbound":
             # -o validates the whole candidate while reading its daemon username.
             daemon_user = checked("/usr/sbin/unbound-checkconf", "-o", "username", candidate)
-            if daemon_user:
-                checked("/usr/sbin/runuser", "-u", daemon_user, "--", "/usr/sbin/unbound-checkconf", candidate)
+            try:
+                daemon_uid = pwd.getpwnam(daemon_user).pw_uid
+            except KeyError:
+                daemon_uid = 0
+            if daemon_uid == 0:
+                raise ValueError("Konfigurasi membutuhkan akun layanan Unbound non-root.")
+            checked("/usr/sbin/runuser", "-u", daemon_user, "--", "/usr/sbin/unbound-checkconf", candidate)
         else:
             binary = "zabbix_agent2" if unit == "zabbix-agent2" else "zabbix_agentd"
             help_text = subprocess.check_output([binary, "--help"], text=True)

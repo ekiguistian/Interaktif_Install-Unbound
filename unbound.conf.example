@@ -17,7 +17,8 @@ server:
 
     # ACCESS CONTROL
     access-control: 127.0.0.0/8 allow
-    access-control: 0.0.0.0/0 allow # -->> Isi sesuai ip local, atau biarkan default untuk semua ip
+    access-control: 0.0.0.0/0 refuse
+    access-control: 10.10.10.0/24 allow # Ganti dengan subnet klien yang diizinkan.
 
     # THREAD & SOCKET
     so-reuseport: yes

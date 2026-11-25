@@ -7,6 +7,8 @@ page_start('Pembaruan panel', true);
 <section class="panel p-5 space-y-4" data-update-panel>
   <p class="text-slate-400">Cek branch <code>main</code> di GitHub. Saat dipasang, installer dapat memulai ulang layanan web dan memutus akses panel sebentar.</p>
   <dl class="detail-grid">
+    <div><dt>Versi terpasang</dt><dd data-installed-version>—</dd></div>
+    <div><dt>Versi yang dicek</dt><dd data-update-version>—</dd></div>
     <div><dt>Commit terpasang</dt><dd><code data-installed>—</code></dd></div>
     <div><dt>Commit yang dicek</dt><dd><code data-update-commit>—</code></dd></div>
   </dl>

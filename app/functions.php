@@ -80,6 +80,20 @@ function valid_private_ipv4(string $ip): bool
         ($octets[0] === 192 && $octets[1] === 168);
 }
 
+function valid_dnsperf_load(string $clients, string $threads, string $qps): bool
+{
+    foreach ([[$clients, 16], [$threads, 4], [$qps, 1000]] as [$value, $max]) {
+        if (!preg_match('/^[1-9][0-9]{0,3}$/D', $value) || (int)$value > $max) return false;
+    }
+    return true;
+}
+
+function public_ipv4(string $address): bool
+{
+    return filter_var($address, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4 | FILTER_FLAG_GLOBAL_RANGE) !== false
+        && (int)explode('.', $address, 2)[0] < 224;
+}
+
 function valid_public_https_url(string $url): bool
 {
     if (strlen($url) > 2048) {
@@ -99,7 +113,7 @@ function valid_public_https_url(string $url): bool
         return false;
     }
     foreach ($addresses as $address) {
-        if (filter_var($address, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
+        if (!public_ipv4($address)) {
             return false;
         }
     }

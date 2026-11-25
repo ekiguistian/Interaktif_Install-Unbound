@@ -60,7 +60,7 @@ function sync_download(string $url, string $target): void
     $host = (string)parse_url($url, PHP_URL_HOST);
     $addresses = gethostbynamel($host) ?: [];
     foreach ($addresses as $ip) {
-        if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+        if (!public_ipv4($ip)) {
             throw new RuntimeException('Sumber mengarah ke jaringan nonpublik.');
         }
     }

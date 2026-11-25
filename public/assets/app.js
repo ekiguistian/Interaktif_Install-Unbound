@@ -150,6 +150,8 @@
         commit = state.commit || '';
         busy = ['queued','cloning','installing'].includes(state.phase);
         updatePanel.querySelector('[data-installed]').textContent = state.installed || 'Belum tercatat';
+        updatePanel.querySelector('[data-installed-version]').textContent = state.installed_version || 'Belum tercatat';
+        updatePanel.querySelector('[data-update-version]').textContent = state.version || '—';
         updatePanel.querySelector('[data-update-commit]').textContent = commit || '—';
         message.textContent = state.message || 'Belum ada pengecekan.';
         install.hidden = state.phase !== 'available';

@@ -6,14 +6,14 @@ page_start('Uji performa dnsperf',true);
 ?>
 <section class="grid gap-5 xl:grid-cols-[.8fr_1.2fr]">
   <div class="panel p-5 sm:p-6"><h2 class="font-semibold">Parameter pengujian</h2><p class="mt-2 text-sm leading-6 text-slate-400">Benchmark memakai domain dari menu Domain Pengujian. Output dnsperf dialirkan langsung ke layar.</p>
-    <div class="mt-4 rounded-xl border border-amber-400/25 bg-amber-400/10 p-4 text-sm leading-6 text-amber-100"><i class="fa-solid fa-triangle-exclamation mr-2"></i>Tes tanpa batas QPS dapat memenuhi kapasitas CPU dan membuat jawaban DNS melambat. Jalankan saat beban rendah. Target hanya boleh berupa IP loopback atau private.</div>
+    <p class="mt-3 text-sm text-slate-400">Target IPv4 privat atau loopback. Maksimum 16 client, 4 thread, dan 1.000 QPS. Hanya satu pengujian dapat berjalan.</p>
     <form class="mt-5 grid gap-4 sm:grid-cols-2" data-confirm="Mulai uji beban DNS selama durasi yang dipilih?" data-stream="dnsperf" data-output="#dnsperf-output">
       <?php field('Target IPv4','target','127.0.0.1','text','Contoh: 192.168.1.2'); ?>
       <?php field('Port','port','53','number'); ?>
       <?php field('Durasi (maksimal 300 detik)','duration','60','number'); ?>
       <?php field('Concurrent clients','clients','4','number'); ?>
       <?php field('Pasangan thread','threads','4','number'); ?>
-      <?php field('Batas QPS (0 = tanpa batas)','qps','0','number'); ?>
+      <?php field('Batas QPS (maksimal 1.000)','qps','100','number'); ?>
       <button class="btn-primary sm:col-span-2 sm:w-fit" type="submit"><i class="fa-solid fa-play"></i>Jalankan dnsperf</button>
     </form>
   </div>

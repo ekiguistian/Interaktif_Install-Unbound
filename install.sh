@@ -325,6 +325,10 @@ install -m 0640 -o root -g unbound-web "$tmp/web-host" "$conf/web-host"
 if [[ -d $src/.git ]] && revision=$(git -c "safe.directory=$src" -C "$src" rev-parse --verify HEAD) && git -c "safe.directory=$src" -C "$src" diff-index --quiet HEAD --; then
     printf '%s\n' "$revision" > "$tmp/installed-commit"
     install -m 0640 -o root -g unbound-web "$tmp/installed-commit" "$conf/installed-commit"
+    if version=$(/usr/bin/python3 -I "$src/bin/update.py" version "$src" "$revision" 2>/dev/null); then
+        printf '{"commit":"%s","version":"%s"}\n' "$revision" "$version" > "$tmp/installed-release"
+        install -m 0640 -o root -g unbound-web "$tmp/installed-release" "$conf/installed-release.json"
+    fi
 elif [[ -f $conf/installed-commit ]]; then
     unlink "$conf/installed-commit"
 fi
