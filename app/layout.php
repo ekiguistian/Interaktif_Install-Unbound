@@ -3,11 +3,13 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/functions.php';
 
-function page_start(string $title, bool $admin = false): void
+function page_start(string $title, bool $admin = false, string $view = ''): void
 {
     $fullTitle = e($title) . ' | Unbound Web Manager';
     $csrfMeta = admin_logged_in() ? '<meta name="csrf-token" content="' . e(csrf_token()) . '">' : '';
     $cssVersion = (string)(@filemtime(__DIR__ . '/../public/assets/app.css') ?: 1);
+    $themeVersion = (string)(@filemtime(__DIR__ . '/../public/assets/theme.js') ?: 1);
+    $bodyClass = $view === 'login' ? 'login-page' : '';
     echo <<<HTML
 <!doctype html>
 <html lang="id">
@@ -16,12 +18,13 @@ function page_start(string $title, bool $admin = false): void
   <meta name="viewport" content="width=device-width, initial-scale=1">
   $csrfMeta
   <title>$fullTitle</title>
+  <script src="/assets/theme.js?v=$themeVersion"></script>
   <link rel="stylesheet" href="/assets/utilities.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
   <script src="/assets/chart.umd.js"></script>
   <link rel="stylesheet" href="/assets/app.css?v=$cssVersion">
 </head>
-<body class="min-h-screen bg-slate-950 text-slate-100 antialiased">
+<body class="min-h-screen antialiased $bodyClass">
 <div class="min-h-screen">
 HTML;
     if ($admin) {
@@ -50,9 +53,15 @@ HTML;
         echo '<form method="post" action="/logout"><input type="hidden" name="csrf_token" value="' . e(csrf_token()) . '">';
         echo '<button type="submit" class="nav-link"><i class="fa-solid fa-arrow-right-from-bracket" aria-hidden="true"></i>Log Out</button></form></nav>';
     }
-    echo '<main class="mx-auto w-full max-w-7xl px-5 py-8 sm:px-8">';
-    echo '<header class="mb-8 flex flex-wrap items-center justify-between gap-4"><div><p class="text-xs font-semibold uppercase tracking-[.24em] text-cyan-300">DNS Operations</p><h1 class="mt-2 text-2xl font-semibold tracking-tight">' . e($title) . '</h1></div>';
-    echo '</header>';
+    $mainClass = $view === 'dashboard' ? 'monitor-page' : ($view === 'login' ? 'login-main' : 'max-w-7xl');
+    echo '<main class="mx-auto w-full px-5 py-8 sm:px-8 ' . $mainClass . '">';
+    echo '<header class="page-heading"><div>';
+    if ($view === 'login') {
+        echo '<span class="login-brand"><i class="fa-solid fa-server" aria-hidden="true"></i> Unbound Web Manager</span>';
+    } else {
+        echo '<h1>' . e($title) . '</h1>';
+    }
+    echo '</div><label class="theme-picker"><i class="fa-solid fa-circle-half-stroke" aria-hidden="true"></i><span>Tema</span><select data-theme-picker aria-label="Tema tampilan"><option value="system">Sistem</option><option value="light">Terang</option><option value="dark">Gelap</option></select></label></header>';
     if ($admin && $unboundSection) {
         echo '<nav class="mb-5 flex flex-wrap gap-2" aria-label="Pengaturan Unbound">';
         foreach ($unboundLinks as [$href, $label]) {

@@ -46,19 +46,19 @@ $next = (string)($_GET['next'] ?? $_POST['next'] ?? '/');
 if (!preg_match('~^/(?:settings(?:/[a-z]+)?)?$~D', $next)) {
     $next = '/';
 }
-page_start('Login admin');
+page_start('Login admin', false, 'login');
 ?>
-<div class="mx-auto max-w-md">
-  <section class="panel p-6 sm:p-8">
-    <div class="mb-6 grid h-12 w-12 place-items-center rounded-2xl bg-cyan-400/10 text-xl text-cyan-300"><i class="fa-solid fa-lock"></i></div>
-    <h2 class="text-xl font-semibold">Masuk ke panel Unbound</h2>
+<div class="login-content">
+  <section class="panel login-card">
+    <div class="login-icon"><i class="fa-solid fa-lock" aria-hidden="true"></i></div>
+    <h1>Masuk ke panel Unbound</h1>
     <p class="mt-2 text-sm leading-6 text-slate-400">Gunakan akun admin untuk membuka monitor dan kontrol server.</p>
     <?php if ($message !== ''): ?><div class="mt-5 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-200"><?= e($message) ?></div><?php endif; ?>
     <form method="post" class="mt-6 space-y-4">
       <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>"><input type="hidden" name="next" value="<?= e($next) ?>">
       <label class="block"><span class="mb-2 block text-sm">Username</span><input class="form-input" name="username" autocomplete="username" required></label>
       <label class="block"><span class="mb-2 block text-sm">Password</span><input class="form-input" type="password" name="password" autocomplete="current-password" required></label>
-      <button class="btn-primary w-full" type="submit"><i class="fa-solid fa-arrow-right-to-bracket"></i>Masuk</button>
+      <button class="btn-primary w-full" type="submit"><i class="fa-solid fa-arrow-right-to-bracket" aria-hidden="true"></i>Masuk</button>
     </form>
     <p class="mt-5 text-xs leading-5 text-slate-500">Setelah delapan percobaan gagal, coba lagi dalam 15 menit.</p>
   </section>

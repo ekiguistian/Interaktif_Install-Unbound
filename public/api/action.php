@@ -40,6 +40,8 @@ try {
 
         case 'unbound-restart':
         case 'unbound-reload':
+        case 'unbound-start':
+        case 'unbound-stop':
         case 'unbound-check':
         case 'root-hints-update':
         case 'root-hints-enable':

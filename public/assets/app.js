@@ -104,28 +104,57 @@
   const charts = new Map();
   const units = {qps:'QPS', cache_hit_ratio:'%', recursion_avg_ms:'ms', cpu_percent:'%', memory_used_mb:'MiB', disk_used_gb:'GiB'};
   let payload;
+  let colors = chartColors();
+  let themeRevision = 0;
+  let serverOffset = 0;
+  function chartColors() {
+    const style = getComputedStyle(document.documentElement);
+    return Object.fromEntries(['chart-a','chart-b','chart-grid','muted','surface','ink','line']
+      .map(key => [key, style.getPropertyValue('--' + key).trim()]));
+  }
+  function timeLabel(seconds) {
+    return new Date(seconds * 1000 + serverOffset).toISOString().slice(11,19);
+  }
   function plot(key, series, unit) {
     if (!window.Chart) return;
-    const labels = payload.history.map(row => row.recorded_at.slice(11,19));
     const datasets = series.map(([label, data], i) => ({
-      label, data, borderColor:i ? '#a5b4fc' : '#2dd4bf', pointRadius:1, borderWidth:2
+      label, data:data.map((y, index) => ({ x:Number(payload.history[index].epoch), y })),
+      borderColor:colors[i ? 'chart-b' : 'chart-a'], pointRadius:0, pointHoverRadius:3, borderWidth:2, spanGaps:90
     }));
     const formatter = key === 'network' ? rate : value => fmt(value, unit);
-    if (!charts.has(key)) {
-      charts.set(key,new Chart(byId('chart-' + key), {type:'line',data:{labels,datasets},options:{
-        responsive:true, maintainAspectRatio:false, animation:false, interaction:{mode:'index',intersect:false},
-        plugins:{legend:{display:key === 'network'}, tooltip:{callbacks:{label:item=>item.dataset.label + ' · ' + formatter(item.parsed.y)}}},
-        scales:{x:{ticks:{maxTicksLimit:5}},y:{beginAtZero:true,ticks:{maxTicksLimit:4,callback:formatter}}}
-      }}));
+    const data = {datasets};
+    const chart = charts.get(key);
+    const dataNeedsTheme = !chart || chart.themeRevision !== themeRevision;
+    const options = dataNeedsTheme ? {
+      responsive:true, maintainAspectRatio:false, animation:false, interaction:{mode:'index',intersect:false},
+      plugins:{legend:{display:key === 'network',labels:{color:colors.ink}},tooltip:{
+        backgroundColor:colors.surface, titleColor:colors.ink, bodyColor:colors.ink,
+        borderColor:colors.line, borderWidth:1,
+        callbacks:{title:items=>timeLabel(items[0].parsed.x),label:item=>item.dataset.label + ' · ' + formatter(item.parsed.y)}
+      }},
+      scales:{
+        x:{type:'linear',ticks:{color:colors.muted,maxTicksLimit:5,callback:timeLabel},grid:{color:colors['chart-grid']}},
+        y:{beginAtZero:true,ticks:{color:colors.muted,maxTicksLimit:4,callback:formatter},grid:{color:colors['chart-grid']}}
+      }
+    } : null;
+    if (!chart) {
+      const created = new Chart(byId('chart-' + key), {type:'line',data,options});
+      created.themeRevision = themeRevision;
+      charts.set(key, created);
     } else {
-      const chart = charts.get(key);
-      chart.data = {labels,datasets};
+      chart.data = data;
+      if (dataNeedsTheme) {
+        chart.options = options;
+        chart.themeRevision = themeRevision;
+      }
       chart.update('none');
     }
   }
   function render() {
+    if (!payload) return;
     const rows = payload.history;
     const latest = rows.at(-1) || {};
+    serverOffset = latest.recorded_at ? Date.parse(latest.recorded_at.replace(' ', 'T') + 'Z') - Number(latest.epoch) * 1000 : 0;
     show('host', payload.host);
     show('system-info', payload.os + ' · kernel ' + payload.kernel);
     show('service', [payload.services.unbound, payload.services.unbound_version, latest.epoch && latest.total_queries == null ? 'statistik belum tersedia' : ''].filter(Boolean).join(' · '));
@@ -138,7 +167,10 @@
     const select = byId('interface');
     const names = Object.keys(latest.network || {});
     const selected = names.includes(select.value) ? select.value : names.includes(payload.interface) ? payload.interface : names.find(n => n !== 'lo') || names[0];
-    select.replaceChildren(...names.map(n => new Option(n,n,false,n === selected)));
+    if (names.join('\0') !== [...select.options].map(option=>option.value).join('\0')) {
+      select.replaceChildren(...names.map(n => new Option(n,n)));
+    }
+    if (selected) select.value = selected;
     const traffic = latest.network?.[selected] || {};
     show('value-network', 'RX ' + rate(traffic.rx) + ' · TX ' + rate(traffic.tx));
     plot('network',['rx','tx'].map(key=>[key.toUpperCase(),rows.map(row=>row.network[selected]?.[key] ?? null)]),'');
@@ -151,6 +183,11 @@
     }
   }
   byId('interface').addEventListener('change',render);
+  document.addEventListener('themechange', () => {
+    colors = chartColors();
+    themeRevision++;
+    render();
+  });
   async function refresh() {
     const started = performance.now();
     try {

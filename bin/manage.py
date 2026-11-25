@@ -23,6 +23,7 @@ CONTROL_CACHE = Path("/var/lib/unbound-web-filters/control-client.conf")
 CONTROL_META = CONTROL_CACHE.with_suffix(".json")
 ROOT_HINTS = Path("/etc/unbound/unbound-web-root.hints")
 ROOT_KEY = Path("/var/lib/unbound/root.key")
+CONTROL_FILES = ("unbound_server.key", "unbound_server.pem", "unbound_control.key", "unbound_control.pem")
 AGENTS = {
     "zabbix-agent2": Path("/etc/zabbix/zabbix_agent2.conf"),
     "zabbix-agent": Path("/etc/zabbix/zabbix_agentd.conf"),
@@ -94,12 +95,15 @@ def control_config():
         fcntl.flock(handle, fcntl.LOCK_EX)
         try:
             metadata = json.loads(CONTROL_META.read_text())
-            if (CONTROL_CACHE.is_file() and metadata.get("files")
+            if (CONTROL_CACHE.is_file() and metadata.get("files") and "features" in metadata
                     and all(stamp(path) == value for path, value in metadata["files"].items())):
                 return CONTROL_CACHE
         except (OSError, ValueError, TypeError, KeyError):
             pass
         watched, server, remote = {}, [], []
+        anchor_keys = {"auto-trust-anchor-file", "trust-anchor-file", "trust-anchor", "trusted-keys-file"}
+        feature_keys = {"root-hints", "module-config", "val-permissive-mode"} | anchor_keys
+        features = {"anchors": []}
         managed = {Path("/etc/unbound/blocklist/blocklist.conf"),
                    Path("/etc/unbound/blocklist/whitelist.conf"),
                    Path("/etc/unbound/unbound.conf.d/90-unbound-web-blocklist.conf")}
@@ -119,11 +123,18 @@ def control_config():
                     if not match:
                         continue
                     key, text = match.groups()
-                    if key not in remote_keys | {"directory", "chroot", "include", "include-toplevel"}:
+                    if key not in remote_keys | feature_keys | {"directory", "chroot", "include", "include-toplevel"}:
                         if not text.split("#", 1)[0].strip():
                             section = key
                         continue
                     values = shlex.split(text, comments=True)
+                    if key in feature_keys:
+                        if section == "server" and values:
+                            if key in anchor_keys and any(values):
+                                features["anchors"].append(key)
+                            elif key not in anchor_keys:
+                                features[key] = " ".join(values)
+                        continue
                     if len(values) != 1:
                         raise ValueError("Opsi kontrol Unbound tidak valid: " + key)
                     value = values[0]
@@ -131,7 +142,7 @@ def control_config():
                         pattern = value if value.startswith("/") else "/etc/unbound/" + value
                         # Directory stamps also detect new files matching an include glob.
                         prefix = re.split(r"[?*\[]", pattern, maxsplit=1)[0]
-                        directory = Path(prefix).parent
+                        directory = Path(prefix) if prefix.endswith('/') else Path(prefix).parent
                         if directory.is_dir():
                             watched[str(directory)] = stamp(directory)
                         for child in sorted(glob.glob(pattern)):
@@ -150,7 +161,8 @@ def control_config():
         body = "server:\n" + "".join(f"    {key}: {json.dumps(value, ensure_ascii=False)}\n" for key, value in server)
         body += "remote-control:\n" + "".join(f"    {key}: {json.dumps(value, ensure_ascii=False)}\n" for key, value in remote)
         atomic(CONTROL_CACHE, body.encode(), 0o600)
-        atomic(CONTROL_META, json.dumps({"files": watched}).encode(), 0o600)
+        atomic(CONTROL_META, json.dumps({"files": watched, "features": features, "remote": dict(remote),
+                                        "directory": dict(server).get("directory", str(UNBOUND.parent))}).encode(), 0o600)
         return CONTROL_CACHE
 
 
@@ -261,8 +273,7 @@ def dnssec_anchor():
 
 
 def control_certificates():
-    names = ["unbound_server.key", "unbound_server.pem", "unbound_control.key", "unbound_control.pem"]
-    targets = [UNBOUND.parent / name for name in names]
+    targets = [UNBOUND.parent / name for name in CONTROL_FILES]
     if any(path.exists() or path.is_symlink() for path in targets):
         if all(path.is_file() and not path.is_symlink() for path in targets):
             print("Sertifikat kontrol sudah tersedia di /etc/unbound.")
@@ -283,6 +294,67 @@ def control_certificates():
     print("Sertifikat kontrol dibuat di /etc/unbound. Atur bagian remote-control untuk menggunakannya.")
 
 
+def resolver_state():
+    state = {"service": active("unbound"), "configured": False, "live": False}
+    if not UNBOUND.is_file():
+        return state
+    cache = control_config()
+    metadata = json.loads(CONTROL_META.read_text())
+    features = metadata["features"]
+    remote = metadata["remote"]
+    hints = features.get("root-hints", "")
+    modules = features.get("module-config", "validator iterator")
+    if state["service"] == "active":
+        try:
+            def option(name):
+                result = subprocess.run(["/usr/sbin/unbound-control", "-c", cache, "get_option", name],
+                                        capture_output=True, text=True, check=True, timeout=1)
+                value = result.stdout.strip()
+                if value.startswith("error"):
+                    raise ValueError(value)
+                return value
+
+            live_modules = option("module-config")
+            live_hints = option("root-hints")
+            modules, hints = live_modules, live_hints
+            state["live"] = True
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+
+    def ready(path):
+        return path.is_file() and path.stat().st_size > 0
+
+    keys = ("server-key-file", "server-cert-file", "control-key-file", "control-cert-file")
+    directory = Path(metadata["directory"] or UNBOUND.parent)
+    paths = [directory / remote[key] if remote.get(key) else UNBOUND.parent / filename
+             for key, filename in zip(keys, CONTROL_FILES)]
+    default_paths = [UNBOUND.parent / name for name in CONTROL_FILES]
+    unix_control = remote.get("control-interface", "").startswith("/")
+    state.update(configured=True, root_hints_active=bool(hints), root_hints_ready=ready(ROOT_HINTS),
+                 dnssec_active="validator" in modules.split() and bool(features["anchors"]),
+                 dnssec_permissive=features.get("val-permissive-mode") == "yes",
+                 anchor_ready=ready(ROOT_KEY), anchor_tool=Path("/usr/sbin/unbound-anchor").is_file(),
+                 certificates_ready=all(ready(path) for path in paths),
+                 certificates_can_prepare=paths == default_paths and not any(path.exists() or path.is_symlink() for path in paths),
+                 tls_enabled=remote.get("control-enable") == "yes" and remote.get("control-use-cert", "yes") == "yes" and not unix_control,
+                 unix_control=unix_control)
+    return state
+
+
+def zabbix_state():
+    for unit, config in AGENTS.items():
+        load = subprocess.check_output(["systemctl", "show", "-p", "LoadState", "--value", unit], text=True).strip()
+        if load not in ("not-found", "") or config.is_file():
+            return {"installed": True}
+    release = {}
+    for line in Path("/etc/os-release").read_text().splitlines():
+        key, sep, value = line.partition("=")
+        if sep and key in ("ID", "VERSION_ID"):
+            release[key] = value.strip('"')
+    return {"installed": False, "jammy": release.get("ID") == "ubuntu" and release.get("VERSION_ID") == "22.04",
+            "architecture": subprocess.check_output(["dpkg", "--print-architecture"], text=True).strip()}
+
+
 def set_resolver_feature(op):
     path = UNBOUND.resolve(strict=True)
     old = path.read_bytes()
@@ -296,8 +368,9 @@ def set_resolver_feature(op):
             if not ROOT_HINTS.is_file() or ROOT_HINTS.is_symlink():
                 raise ValueError("Unduh root hints terlebih dahulu.")
             directives = [f'root-hints: "{ROOT_HINTS}"']
-        elif re.search(r'(?m)^\s*root-hints\s*:', body):
-            raise ValueError("Root hints juga diatur manual. Hapus arahan root-hints lewat editor.")
+        else:
+            # An empty option falls back to Unbound's built-in root hints.
+            directives = ['root-hints: ""']
     else:
         modules = checked("/usr/sbin/unbound-checkconf", "-o", "module-config", UNBOUND).split()
         if action == "enable" and "validator" not in modules:
@@ -306,6 +379,7 @@ def set_resolver_feature(op):
             modules = [module for module in modules if module != "validator"]
         directives = [f'module-config: "{" ".join(modules)}"']
         if action == "enable":
+            directives.append('val-permissive-mode: no')
             if not ROOT_KEY.is_file() or not ROOT_KEY.stat().st_size:
                 raise ValueError("Siapkan trust anchor terlebih dahulu.")
             # Ubuntu normally includes this packaged root anchor already.
@@ -353,6 +427,10 @@ def main(args):
                        check=True, timeout=0.6 if op == "stats-live" else 8)
     elif op == "config-read" and len(params) == 1:
         editor(op, *params)
+    elif op == "resolver-state" and not params:
+        print(json.dumps(resolver_state()))
+    elif op == "zabbix-state" and not params:
+        print(json.dumps(zabbix_state()))
     elif op == "filters-state" and not params:
         block, white = flags()
         print(json.dumps(dict(block=block == "1", white=white == "1")))
@@ -367,6 +445,9 @@ def main(args):
                 editor(op, *params)
             elif op == "unbound-check" and not params:
                 print(checked("/usr/sbin/unbound-checkconf", UNBOUND))
+            elif op == "unbound-stop" and not params:
+                command("systemctl", "stop", "unbound")
+                print("Unbound sudah dihentikan.")
             elif op == "root-hints-update" and not params:
                 root_hints_update()
             elif op == "dnssec-anchor" and not params:
@@ -375,7 +456,7 @@ def main(args):
                 control_certificates()
             elif op in ("root-hints-enable", "root-hints-disable", "dnssec-enable", "dnssec-disable") and not params:
                 set_resolver_feature(op)
-            elif op in ("unbound-restart", "unbound-reload") and not params:
+            elif op in ("unbound-start", "unbound-restart", "unbound-reload") and not params:
                 command(*host_command("/usr/sbin/unbound-checkconf", str(UNBOUND)))
                 command("systemctl", op.split("-")[1], "unbound")
             elif op == "update-blocklists" and not params:
