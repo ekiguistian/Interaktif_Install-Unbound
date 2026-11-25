@@ -28,7 +28,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $_SESSION['admin_user'] = $expectedUser;
                 db()->prepare('DELETE FROM login_attempts WHERE remote_addr = ?')->execute([client_ip()]);
                 $next = (string)($_POST['next'] ?? '/');
-                if (!preg_match('~^/(?:settings(?:/[a-z]+)?)?$~D', $next)) {
+                if (!preg_match('~^/(?:settings(?:/[a-z]+(?:-[a-z]+)*)?)?$~D', $next)) {
                     $next = '/';
                 }
                 header('Location: ' . $next);
@@ -43,7 +43,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 $next = (string)($_GET['next'] ?? $_POST['next'] ?? '/');
-if (!preg_match('~^/(?:settings(?:/[a-z]+)?)?$~D', $next)) {
+if (!preg_match('~^/(?:settings(?:/[a-z]+(?:-[a-z]+)*)?)?$~D', $next)) {
     $next = '/';
 }
 page_start('Login admin', false, 'login');

@@ -32,21 +32,33 @@
   });
 
   document.querySelectorAll('form[data-stream]').forEach((form) => {
+    const stop = form.querySelector('[data-stream-stop]');
+    const logStatus = stop ? document.getElementById('unbound-log-status') : null;
+    let controller;
+    stop?.addEventListener('click', () => controller?.abort());
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
+      if (controller) return;
       if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) return;
       const button = form.querySelector('[type="submit"]');
       const output = document.querySelector(form.dataset.output || '[data-stream-output]');
       if (button) { button.disabled = true; button.dataset.oldText = button.innerHTML; button.textContent = 'Berjalan…'; }
       if (output) { output.textContent = ''; output.classList.remove('text-rose-300'); }
+      if (stop) {
+        controller = new AbortController();
+        stop.disabled = false;
+        logStatus.textContent = 'Menghubungkan…';
+      }
       try {
         const payload = Object.fromEntries(new FormData(form).entries());
         payload.task = form.dataset.stream;
         const response = await fetch('/api/stream', {
-          method: 'POST', headers: {'Content-Type':'application/json','X-CSRF-Token':csrf}, body: JSON.stringify(payload)
+          method: 'POST', headers: {'Content-Type':'application/json','X-CSRF-Token':csrf},
+          body: JSON.stringify(payload), signal: controller?.signal
         });
         if (!response.ok || !response.body) throw new Error('Server menolak proses (' + response.status + ').');
         if (!response.headers.get('content-type')?.includes('text/event-stream')) throw new Error('Response streaming bukan SSE.');
+        if (logStatus) logStatus.textContent = 'Menampilkan log langsung.';
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
@@ -63,10 +75,14 @@
             if (!data) continue;
             try {
               const eventData = JSON.parse(data);
-              if (output && typeof eventData.output === 'string') output.textContent += eventData.output;
+              if (output && typeof eventData.output === 'string') {
+                const combined = output.textContent + eventData.output;
+                output.textContent = stop && combined.length > 64000 ? combined.slice(-64000) : combined;
+              }
               if (eventData.done === true) {
                 streamExitCode = Number(eventData.exitCode);
-                if (output) output.textContent += streamExitCode === 0 ? '\n[SELESAI:0]\n' : '\n[PROSES GAGAL:' + streamExitCode + ']\n';
+                if (logStatus) logStatus.textContent = streamExitCode === 0 ? 'Live Log berakhir.' : 'Live Log gagal. Lihat pesan di bawah.';
+                else if (output) output.textContent += streamExitCode === 0 ? '\n[SELESAI:0]\n' : '\n[PROSES GAGAL:' + streamExitCode + ']\n';
               }
               if (output) output.scrollTop = output.scrollHeight;
             } catch (_) {
@@ -79,8 +95,15 @@
         }
         if (output && /\[PROSES GAGAL:/.test(output.textContent)) output.classList.add('text-rose-300');
       } catch (error) {
-        if (output) { output.textContent += '\n' + error.message; output.classList.add('text-rose-300'); }
+        if (controller?.signal.aborted) {
+          logStatus.textContent = 'Live Log dihentikan.';
+        } else {
+          if (logStatus) logStatus.textContent = 'Live Log terputus.';
+          if (output) { output.textContent += '\n' + error.message; output.classList.add('text-rose-300'); }
+        }
       } finally {
+        controller = undefined;
+        if (stop) stop.disabled = true;
         if (button) {
           button.disabled = false;
           button.innerHTML = button.dataset.oldText;

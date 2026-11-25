@@ -55,7 +55,7 @@ final class CommandRunner
     }
 
     /** @param list<string> $argv */
-    public static function stream(array $argv): int
+    public static function stream(array $argv, bool $stopOnDisconnect = false): int
     {
         $command = self::command($argv);
         $descriptor = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['redirect', 1]];
@@ -65,22 +65,30 @@ final class CommandRunner
             flush();
             return 127;
         }
-        fclose($pipes[0]);
+        if (!$stopOnDisconnect) fclose($pipes[0]);
         stream_set_blocking($pipes[1], false);
         $status = ['exitcode' => 1, 'running' => true];
+        $heartbeat = microtime(true);
         while (true) {
-            $chunk = stream_get_contents($pipes[1]);
+            $chunk = stream_get_contents($pipes[1], $stopOnDisconnect ? 8192 : null);
             if ($chunk !== false && $chunk !== '') {
                 echo 'data: ' . json_encode(['output' => $chunk], JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE) . "\n\n";
                 flush();
             }
+            if ($stopOnDisconnect && microtime(true) - $heartbeat >= 1) {
+                echo ": keepalive\n\n";
+                flush();
+                $heartbeat = microtime(true);
+            }
+            if ($stopOnDisconnect && connection_aborted()) break;
             $status = proc_get_status($process);
             if (!$status['running']) {
                 break;
             }
             usleep(100000);
         }
-        $remaining = stream_get_contents($pipes[1]);
+        if ($stopOnDisconnect) fclose($pipes[0]);
+        $remaining = connection_aborted() ? '' : stream_get_contents($pipes[1]);
         if ($remaining !== false && $remaining !== '') {
             echo 'data: ' . json_encode(['output' => $remaining], JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE) . "\n\n";
             flush();

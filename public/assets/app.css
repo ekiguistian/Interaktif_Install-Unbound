@@ -40,6 +40,7 @@ body { background:var(--base); color:var(--ink); }
 button:disabled { opacity:.55; cursor:wait; }
 [data-update-run][hidden] { display:none; }
 pre { white-space:pre-wrap; overflow-wrap:anywhere; }
+.live-log { overflow:auto; height:clamp(16rem,55vh,38rem); padding:1rem; border:1px solid var(--line); border-radius:.65rem; background:var(--field); font-size:.85rem; line-height:1.55; }
 .kpi { min-height:135px; }
 .text-slate-400,.text-slate-300 { color:var(--muted); }
 .text-slate-500 { color:var(--quiet); }

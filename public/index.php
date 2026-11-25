@@ -36,6 +36,7 @@ $routes = [
     '/logout' => __DIR__ . '/logout.php',
     '/settings' => __DIR__ . '/admin/index.php',
     '/settings/unbound' => __DIR__ . '/admin/unbound.php',
+    '/settings/unbound-log' => __DIR__ . '/admin/unbound-log.php',
     '/settings/blocklists' => __DIR__ . '/admin/blocklists.php',
     '/settings/zabbix' => __DIR__ . '/admin/zabbix.php',
     '/settings/firewall' => __DIR__ . '/admin/firewall.php',

@@ -9,6 +9,9 @@ verify_csrf($_SERVER['HTTP_X_CSRF_TOKEN']??null);
 $task=(string)($payload['task']??'');
 $args=['/usr/bin/sudo','-n','/usr/local/sbin/unbound-web-manage'];
 switch ($task) {
+    case 'unbound-live-log':
+        $args[] = 'unbound-live-log';
+        break;
     case 'blocklist-sync':
         $args[]='update-blocklists';
         break;
@@ -35,7 +38,8 @@ header('Content-Type: text/event-stream; charset=utf-8');
 header('Cache-Control: no-cache, no-store, must-revalidate');
 header('X-Accel-Buffering: no');
 flush();
-$exitCode=CommandRunner::stream($args);
+$exitCode=CommandRunner::stream($args, stopOnDisconnect: $task === 'unbound-live-log');
+if (connection_aborted()) exit;
 echo 'data: ' . json_encode(['done' => true, 'exitCode' => $exitCode], JSON_UNESCAPED_SLASHES) . "\n\n";
 flush();
 

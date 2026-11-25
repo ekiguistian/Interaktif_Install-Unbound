@@ -9,11 +9,13 @@ import json
 import os
 from pathlib import Path
 import re
+import selectors
 import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 APP = Path("/opt/www/unbound-web")
 UNBOUND = Path("/etc/unbound/unbound.conf")
@@ -632,6 +634,50 @@ def toggle_filter(index, enabled):
     print("Konfigurasi filter, jadwal, dan database sudah diperbarui.")
 
 
+def live_unbound_log():
+    # A dedicated reader keeps the log feed from consuming all available web workers.
+    with open("/run/unbound-web-live-log.lock", "a") as handle:
+        deadline = time.monotonic() + 2
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError as error:
+                if time.monotonic() >= deadline:
+                    raise ValueError("Live Log sedang dibuka di sesi lain. Hentikan sesi tersebut atau coba lagi.") from error
+                time.sleep(0.1)
+        process = subprocess.Popen(["/usr/bin/journalctl", "--unit=unbound.service", "--follow", "--lines=40",
+                                    "--output=short-iso", "--no-pager"], stdin=subprocess.DEVNULL,
+                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        try:
+            with selectors.DefaultSelector() as watch:
+                watch.register(sys.stdin.fileno(), selectors.EVENT_READ)
+                watch.register(process.stdout, selectors.EVENT_READ)
+                while True:
+                    ready = watch.select()
+                    # PHP closes stdin on browser disconnect, including when the journal is idle.
+                    if any(key.fd == sys.stdin.fileno() for key, _ in ready):
+                        return
+                    chunk = os.read(process.stdout.fileno(), 4096)
+                    if not chunk:
+                        if process.wait():
+                            raise ValueError("Journal Unbound tidak dapat dibaca.")
+                        return
+                    sys.stdout.buffer.write(chunk)
+                    sys.stdout.buffer.flush()
+        except BrokenPipeError:
+            pass
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+            process.stdout.close()
+
+
 def main(args):
     op, *params = args
     if op.startswith("firewall-"):
@@ -647,6 +693,8 @@ def main(args):
             match = re.search(r"Version\s+([\d.]+)", version.stdout)
             if match:
                 print("unbound_version=" + match[1])
+    elif op == "unbound-live-log" and not params:
+        live_unbound_log()
     elif op in ("stats", "stats-live") and not params:
         subprocess.run(["unbound-control", "-c", str(control_config()), "stats_noreset"],
                        check=True, timeout=0.6 if op == "stats-live" else 8)
