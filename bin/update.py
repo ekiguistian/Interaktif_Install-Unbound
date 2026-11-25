@@ -33,6 +33,10 @@ def git(*args, timeout=25):
 
 def read_status():
     state = json.loads(STATUS.read_text()) if STATUS.is_file() else {"phase": "idle"}
+    saved = json.loads(release_db("installed"))
+    if saved:
+        state.update(installed=saved["commit_id"], installed_version=saved["version"])
+        return state
     installed = INSTALLED.read_text().strip() if INSTALLED.is_file() else ""
     state["installed"] = installed if REF.fullmatch(installed) else ""
     state["installed_version"] = ""
@@ -41,6 +45,14 @@ def read_status():
         if release.get("commit") == installed:
             state["installed_version"] = release.get("version", "")
     return state
+
+
+def release_db(*args):
+    result = subprocess.run(["/usr/bin/php8.4", str(APP / "bin/release-store.php"), *args],
+                            capture_output=True, text=True, timeout=5)
+    if result.returncode:
+        raise ValueError("Database versi tidak bisa dibaca atau diperbarui. Periksa instalasi panel.")
+    return result.stdout.strip()
 
 
 def publish(phase, commit="", message="", version=""):
@@ -88,7 +100,8 @@ def check():
         raise ValueError("Commit main tidak dapat diverifikasi.")
     commit = result[0]
     state = read_status()
-    version = remote_version(commit)
+    version = release_db("lookup", commit) or remote_version(commit)
+    release_db("record-check", commit, version)
     if commit == state["installed"]:
         publish("current", commit, "Panel sudah memakai commit terbaru.", version)
     else:

@@ -72,6 +72,26 @@ function systemMetrics(): array
     ];
 }
 
+function exportZabbixSample(array $metrics): void
+{
+    $path = '/var/lib/unbound-web-zabbix';
+    if (!is_dir($path)) return;
+    $temp = $path . '/.sample-' . bin2hex(random_bytes(8));
+    try {
+        $handle = @fopen($temp, 'xb');
+        if ($handle === false) return;
+        try {
+            $data = json_encode(array_filter($metrics, static fn($value) => $value !== null), JSON_THROW_ON_ERROR);
+            $complete = fwrite($handle, $data) === strlen($data);
+        } finally {
+            fclose($handle);
+        }
+        if ($complete && @chmod($temp, 0640) && @rename($temp, $path . '/latest.json')) return;
+    } finally {
+        if (is_file($temp)) @unlink($temp);
+    }
+}
+
 try {
     $lock = fopen('/var/lib/unbound-web/worker.lock', 'c');
     if ($lock === false || !flock($lock, LOCK_EX | LOCK_NB)) {
@@ -157,6 +177,16 @@ try {
         round($recursionMs, 4), $system['cpu_percent'] ?? 0, $system['load_1m'], $system['load_5m'], $system['load_15m'],
         $system['memory_used_mb'], $system['memory_total_mb'], $system['disk_used_gb'], $system['disk_total_gb'], $system['uptime_seconds'], json_encode($sample, JSON_THROW_ON_ERROR),
     ]);
+    exportZabbixSample([
+        'sample_time' => (int)$sample['collected_at'],
+        'unbound_up' => $services['unbound'] === 'active' ? 1 : 0,
+        'dns_stats_available' => $sample['dns'] ? 1 : 0,
+        'total_queries' => $sample['dns'] ? $queries : null,
+        'total_replies' => $sample['dns'] ? $replies : null,
+        'qps' => $sample['qps'] === null ? null : round($sample['qps'], 4),
+        'cache_hit_percent' => $sample['dns'] ? round($cacheRatio, 4) : null,
+        'recursion_avg_ms' => $sample['dns'] ? round($recursionMs, 4) : null,
+    ] + $sample['system']);
     // Keep recent seconds, then one sample per minute, so 1 Hz does not grow the
     // database to millions of rows. Maintenance runs once a minute, not per sample.
     $maintenance = '/var/lib/unbound-web/metrics-maintenance';

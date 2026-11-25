@@ -72,4 +72,11 @@ CREATE TABLE IF NOT EXISTS login_attempts (
     INDEX idx_login_attempts_addr_time (remote_addr, attempted_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
+CREATE TABLE IF NOT EXISTS app_releases (
+    commit_hash CHAR(40) CHARACTER SET ascii COLLATE ascii_bin NOT NULL PRIMARY KEY,
+    version VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    checked_at DATETIME NULL,
+    installed_at DATETIME NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
 -- System ini di buat dan hasil ide oleh Eki Guistian, Anda boleh memakai dan memdifikasi dengan syarat tetap membuka code ke public dan mencatumkan sumber dari Eki guistian. sesuai aturan opensource

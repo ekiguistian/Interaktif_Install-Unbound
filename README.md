@@ -42,7 +42,7 @@ Jika pesan `503` masih muncul, tunggu beberapa menit lalu ulangi perintah yang s
 
 ## Update dari main
 
-Versi rilis dimulai dari **1.0.30**. Setiap commit baru pada jalur utama `main` menambah angka terakhir satu kali. Panel menampilkan versi dan hash commit lengkap. Gunakan clone dengan riwayat lengkap untuk menghitung versi.
+Versi dimulai dari **1.0.30**. Panel memakai hash commit sebagai kunci, menghitung versi dari riwayat `main`, dan menyimpan pasangan hash serta versi di MySQL. Setiap commit baru pada jalur utama menambah angka terakhir satu kali. Panel menampilkan versi dan hash lengkap.
 
 Setelah memasang versi ini, buka **Pembaruan → Check for update**, cek commit yang tampil, lalu pilih **Pasang pembaruan**. Panel mengambil checkout `main` dari repo GitHub proyek ke `/opt/www/unbound-web/.updates/` dan menjalankan `install.sh` melalui systemd. Status tetap tersedia setelah PHP-FPM dimulai ulang. Untuk melihat kegagalan, jalankan `sudo journalctl -u unbound-web-update -n 50`.
 
@@ -63,7 +63,7 @@ sudo bash ./install.sh
 | **Unbound** | Cek, simpan, reload, start/stop, root hints, DNSSEC, dan sertifikat TLS remote-control. Perubahan konfigurasi yang berhasil disimpan ke file dan database. |
 | **Live Log** | Buka **Unbound → Live Log** untuk membaca journal dan mengaktifkan atau menonaktifkan log query dan reply secara terpisah. **Stop** menghentikan sesi. |
 | **Cron / Uji DNS** | Status monitoring, jadwal filter, dan uji resolver dengan dnsperf. |
-| **Zabbix Agent** | Edit konfigurasi dan muat ulang agent. Jika belum terpasang, menu menampilkan [perintah Agent 2 7.0 LTS](https://www.zabbix.com/download?zabbix=7.0&os_distribution=ubuntu&os_version=22.04&components=agent_2) untuk Ubuntu 22.04. |
+| **Zabbix Agent** | Edit konfigurasi, muat ulang agen, dan aktifkan ekspor metrik Unbound. Lihat [panduan item dan grafik Zabbix](docs/zabbix.md). |
 | **Firewall** | Kelola rule, status, dan reload UFW. |
 
 Tema **Sistem** mengikuti OS. Pilih **Terang** atau **Gelap** untuk menyimpan pilihan di browser.

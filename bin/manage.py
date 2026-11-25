@@ -35,6 +35,13 @@ AGENTS = {
     "zabbix-agent2": Path("/etc/zabbix/zabbix_agent2.conf"),
     "zabbix-agent": Path("/etc/zabbix/zabbix_agentd.conf"),
 }
+ZABBIX_METRICS_DIR = Path("/var/lib/unbound-web-zabbix")
+ZABBIX_PARAMETER = b"# Dikelola Unbound Web Manager.\nUserParameter=unbound.web.metrics,/usr/bin/python3 -I /opt/www/unbound-web/bin/zabbix-metrics.py\n"
+
+
+def zabbix_metrics_config(unit):
+    config = AGENTS[unit]
+    return config.parent / (config.stem + ".d") / "unbound-web-metrics.conf"
 
 
 def command(*args):
@@ -243,6 +250,9 @@ def validate_web_config(service, content):
                 continue
             with source.open("rb") as stream:
                 data = stream.read(remaining + 1)
+            if service == "zabbix" and source in {zabbix_metrics_config(unit) for unit in AGENTS} and data == ZABBIX_PARAMETER:
+                # Only the fixed command shipped with this panel is trusted here.
+                continue
             inspect(data.decode())
 
     def inspect(body):
@@ -462,6 +472,75 @@ def zabbix_state():
             release[key] = value.strip('"')
     return {"installed": False, "jammy": release.get("ID") == "ubuntu" and release.get("VERSION_ID") == "22.04",
             "architecture": subprocess.check_output(["dpkg", "--print-architecture"], text=True).strip()}
+
+
+def zabbix_includes(config, body, target):
+    for match in re.finditer(r"(?m)^\s*Include\s*=\s*([^\r\n]+)", body):
+        pattern = str(config.parent / match[1].strip())
+        if target.match(pattern) or Path(pattern) == target.parent:
+            return True
+    return False
+
+
+def zabbix_metrics_state():
+    unit, config = service_config("zabbix")
+    config = trusted_config_path(config, Path("/etc/zabbix"))
+    dropin = zabbix_metrics_config(unit)
+    enabled = (dropin.is_file() and not dropin.is_symlink() and dropin.read_bytes() == ZABBIX_PARAMETER
+               and zabbix_includes(config, config.read_text(), dropin))
+    return {"enabled": enabled, "unit": unit, "config": str(dropin)}
+
+
+def set_zabbix_metrics(enabled):
+    unit, config = service_config("zabbix")
+    base = Path("/etc/zabbix")
+    config = trusted_config_path(config, base)
+    dropin = zabbix_metrics_config(unit)
+    if dropin.is_symlink():
+        raise ValueError("File metrik Zabbix tidak boleh berupa symlink.")
+    if not dropin.parent.exists() and enabled:
+        dropin.parent.mkdir(mode=0o755)
+    if dropin.parent.exists():
+        trusted_config_path(dropin.parent, base)
+    if dropin.exists():
+        trusted_config_path(dropin, base)
+    old_dropin = dropin.read_bytes() if dropin.is_file() else None
+    if old_dropin is not None and old_dropin != ZABBIX_PARAMETER:
+        raise ValueError("File metrik Zabbix sudah dipakai konfigurasi lain.")
+    old = config.read_bytes()
+    body = old.decode()
+    addon = "# Unbound Web Manager metrics\n" + f"Include={dropin}\n"
+    if enabled and not zabbix_includes(config, body, dropin):
+        body = body.rstrip() + "\n\n" + addon
+    if not enabled:
+        body = body.replace(addon, "")
+    was_active = active(unit) == "active"
+    if enabled:
+        if ZABBIX_METRICS_DIR.is_symlink():
+            raise ValueError("Direktori ekspor metrik tidak boleh berupa symlink.")
+        ZABBIX_METRICS_DIR.mkdir(mode=0o750, exist_ok=True)
+        os.chown(ZABBIX_METRICS_DIR, pwd.getpwnam("unbound-web").pw_uid, grp.getgrnam("zabbix").gr_gid)
+        ZABBIX_METRICS_DIR.chmod(0o2750)
+    try:
+        if enabled:
+            atomic(dropin, ZABBIX_PARAMETER)
+        else:
+            dropin.unlink(missing_ok=True)
+        if was_active or enabled:
+            apply_config(unit, config, old, body.encode())
+        elif body.encode() != old:
+            apply_config(unit, config, old, body.encode(), reload=False)
+    except (ValueError, OSError, subprocess.SubprocessError):
+        if old_dropin is None:
+            dropin.unlink(missing_ok=True)
+        else:
+            atomic(dropin, old_dropin)
+        if was_active:
+            command("systemctl", "reload-or-restart", unit)
+        elif active(unit) == "active":
+            command("systemctl", "stop", unit)
+        raise
+    print("Statistik Unbound untuk Zabbix " + ("diaktifkan." if enabled else "dinonaktifkan."))
 
 
 SECTION = re.compile(r"^\s*([a-z][a-z0-9-]*):\s*(?:#.*)?$", re.I)
@@ -851,6 +930,8 @@ def main(args):
         print(json.dumps(resolver_state()))
     elif op == "zabbix-state" and not params:
         print(json.dumps(zabbix_state()))
+    elif op == "zabbix-metrics-state" and not params:
+        print(json.dumps(zabbix_metrics_state()))
     elif op in ("update-status", "update-check") and not params:
         command(*host_command("/usr/bin/python3", "-I", str(APP / "bin/update.py"), op.split("-", 1)[1]))
     elif op == "update-queue" and len(params) == 1 and re.fullmatch(r"[0-9a-f]{40}", params[0]):
@@ -866,6 +947,8 @@ def main(args):
         with lock():
             if op == "config-save" and len(params) == 2:
                 editor(op, *params)
+            elif op in ("zabbix-metrics-enable", "zabbix-metrics-disable") and not params:
+                set_zabbix_metrics(op.endswith("-enable"))
             elif op == "unbound-logging-set" and len(params) == 2 and params[0] in LOG_OPTIONS and params[1] in ("yes", "no"):
                 set_logging(*params)
             elif op == "unbound-check" and not params:

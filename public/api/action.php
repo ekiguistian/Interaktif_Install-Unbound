@@ -63,6 +63,8 @@ try {
             json_response(['ok' => $result['code'] === 0, 'message' => trim($result['output'])], $result['code'] === 0 ? 200 : 422);
 
         case 'unbound-restart':
+        case 'zabbix-metrics-enable':
+        case 'zabbix-metrics-disable':
         case 'unbound-reload':
         case 'unbound-start':
         case 'unbound-stop':

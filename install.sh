@@ -16,7 +16,7 @@ src=$(cd -- "$(dirname -- "$0")" && pwd -P)
 dest=/opt/www/unbound-web
 conf=/etc/unbound-web
 [[ $src != "$dest" ]] || die 'Jalankan installer dari checkout proyek.'
-for file in app/bootstrap.php app/functions.php app/filters.php app/domains.php bin/manage.py bin/monitor.py bin/worker.php bin/seed-domains.php bin/seed-filters.php bin/record-config.php bin/update.py database/schema.sql public/index.php src/dnsperf-domains.txt; do
+for file in app/bootstrap.php app/functions.php app/filters.php app/domains.php bin/manage.py bin/monitor.py bin/worker.php bin/seed-domains.php bin/seed-filters.php bin/record-config.php bin/release-store.php bin/update.py bin/zabbix-metrics.py database/schema.sql public/index.php src/dnsperf-domains.txt; do
     [[ -f $src/$file ]] || die "Source proyek tidak lengkap. File $file tidak ditemukan. Clone repositori sebelum menjalankan installer."
 done
 exec 9>/run/unbound-web-install.lock
@@ -326,11 +326,15 @@ if [[ -d $src/.git ]] && revision=$(git -c "safe.directory=$src" -C "$src" rev-p
     printf '%s\n' "$revision" > "$tmp/installed-commit"
     install -m 0640 -o root -g unbound-web "$tmp/installed-commit" "$conf/installed-commit"
     if version=$(/usr/bin/python3 -I "$src/bin/update.py" version "$src" "$revision" 2>/dev/null); then
+        runuser -u unbound-web -- php8.4 "$dest/bin/release-store.php" record-install "$revision" "$version"
         printf '{"commit":"%s","version":"%s"}\n' "$revision" "$version" > "$tmp/installed-release"
         install -m 0640 -o root -g unbound-web "$tmp/installed-release" "$conf/installed-release.json"
+    else
+        runuser -u unbound-web -- php8.4 "$dest/bin/release-store.php" forget-installed
     fi
-elif [[ -f $conf/installed-commit ]]; then
-    unlink "$conf/installed-commit"
+else
+    runuser -u unbound-web -- php8.4 "$dest/bin/release-store.php" forget-installed
+    if [[ -f $conf/installed-commit ]]; then unlink "$conf/installed-commit"; fi
 fi
 if [[ ${UNBOUND_WEB_QUIET_CREDENTIALS:-0} = 1 ]]; then
     printf '\nPanel siap di https://%s/\n' "$host"
