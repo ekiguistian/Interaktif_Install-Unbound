@@ -6,7 +6,13 @@ header('Cache-Control: no-store');
 session_write_close();
 
 try {
-    $rows = db()->query('SELECT *, UNIX_TIMESTAMP(recorded_at) AS epoch FROM metrics WHERE recorded_at >= NOW() - INTERVAL 1 HOUR ORDER BY id DESC LIMIT 61')->fetchAll();
+    // Recent points retain one-second detail; older points cover the full hour
+    // at minute resolution without sending thousands of rows every second.
+    $rows = db()->query('SELECT m.*, UNIX_TIMESTAMP(m.recorded_at) AS epoch FROM metrics m
+        INNER JOIN (SELECT MAX(id) AS id FROM metrics WHERE recorded_at >= NOW() - INTERVAL 1 HOUR
+            GROUP BY CASE WHEN recorded_at >= NOW() - INTERVAL 2 MINUTE THEN UNIX_TIMESTAMP(recorded_at)
+                ELSE FLOOR(UNIX_TIMESTAMP(recorded_at)/60)*60 END
+        ) points ON points.id=m.id ORDER BY m.id DESC LIMIT 181')->fetchAll();
     $history = [];
     $previous = null;
     foreach (array_reverse($rows) as $row) {
@@ -18,7 +24,8 @@ try {
             ]],
             'boot' => null,
         ];
-        $elapsed = (int)$row['epoch'] - ($previous['epoch'] ?? 0);
+        $sampleTime = (float)($sample['collected_at'] ?? $row['epoch']);
+        $elapsed = $sampleTime - ($previous['epoch'] ?? 0);
         $network = [];
         foreach ($networkSample['interfaces'] as $name => $counters) {
             foreach (['rx', 'tx'] as $direction) {
@@ -29,7 +36,7 @@ try {
                     ? ($counters[$direction] - $last) * 8 / $elapsed : null;
             }
         }
-        $previous = $networkSample + ['epoch' => (int)$row['epoch'], 'uptime' => (int)$row['uptime_seconds']];
+        $previous = $networkSample + ['epoch' => $sampleTime, 'uptime' => (int)$row['uptime_seconds']];
         unset($row['sample_json']);
         $row['network'] = $network;
         $row['qps'] = $sample === null ? $row['qps'] : $sample['qps'];
@@ -43,7 +50,7 @@ try {
     }
     $os = is_readable('/etc/os-release') ? parse_ini_file('/etc/os-release', false, INI_SCANNER_RAW) : [];
     json_response([
-        'ok' => true, 'history' => array_slice($history, -60), 'services' => system_status(),
+        'ok' => true, 'history' => $history, 'services' => system_status(), 'interval_seconds' => 1,
         'host' => gethostname(), 'kernel' => php_uname('r'), 'os' => $os['PRETTY_NAME'] ?? 'Linux',
         'interface' => app_env('NET_INTERFACE'), 'now' => time(),
     ]);

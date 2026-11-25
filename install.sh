@@ -16,7 +16,7 @@ src=$(cd -- "$(dirname -- "$0")" && pwd -P)
 dest=/opt/www/unbound-web
 conf=/etc/unbound-web
 [[ $src != "$dest" ]] || die 'Jalankan installer dari checkout proyek.'
-for file in app/bootstrap.php app/functions.php bin/manage.py bin/worker.php bin/seed-domains.php database/schema.sql public/index.php src/dnsperf-domains.txt; do
+for file in app/bootstrap.php app/functions.php app/filters.php app/domains.php bin/manage.py bin/monitor.py bin/worker.php bin/seed-domains.php bin/seed-filters.php database/schema.sql public/index.php src/dnsperf-domains.txt; do
     [[ -f $src/$file ]] || die "Source proyek tidak lengkap. File $file tidak ditemukan. Clone repositori sebelum menjalankan installer."
 done
 exec 9>/run/unbound-web-install.lock
@@ -90,6 +90,7 @@ step 'Menyalin aplikasi dan menyiapkan akun layanan'
 id unbound-web >/dev/null 2>&1 || useradd --system --user-group --home-dir /nonexistent --shell /usr/sbin/nologin unbound-web
 install -d -m 0750 -o root -g unbound-web "$conf"
 install -d -m 0750 -o unbound-web -g unbound-web /var/lib/unbound-web
+install -d -m 0750 -o root -g unbound-web /var/lib/unbound-web-filters
 install -d -m 0700 -o unbound-web -g unbound-web /var/lib/php/unbound-web-sessions
 install -d -m 0755 "$dest"
 for folder in app bin database public src; do
@@ -97,7 +98,11 @@ for folder in app bin database public src; do
     rsync -rptgo --delete --chown=root:root --chmod=D755,F644 "$src/$folder/" "$dest/$folder/"
 done
 install -m 0755 -o root -g root "$src/bin/manage.py" /usr/local/sbin/unbound-web-manage
-printf 'unbound-web ALL=(root) NOPASSWD: /usr/local/sbin/unbound-web-manage\n' > "$tmp/sudoers"
+cat > "$tmp/sudoers" <<'SUDOERS'
+unbound-web ALL=(root) NOPASSWD: /usr/local/sbin/unbound-web-manage
+Cmnd_Alias UNBOUND_WEB_METRICS = /usr/local/sbin/unbound-web-manage stats, /usr/local/sbin/unbound-web-manage stats-live, /usr/local/sbin/unbound-web-manage service-status
+Defaults!UNBOUND_WEB_METRICS !log_allowed, !pam_session
+SUDOERS
 visudo -cf "$tmp/sudoers"
 install -m 0440 "$tmp/sudoers" /etc/sudoers.d/unbound-web
 
@@ -159,8 +164,13 @@ disk_total_gb|DECIMAL(12,3) NOT NULL DEFAULT 0
 uptime_seconds|BIGINT UNSIGNED NOT NULL DEFAULT 0
 sample_json|JSON NULL
 COLUMNS
+settings_size=$("${mysql[@]}" -N -B "$db_name" -e "SELECT character_maximum_length FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='app_settings' AND column_name='setting_value'")
+if [[ $settings_size -lt 2048 ]]; then
+    "${mysql[@]}" "$db_name" -e 'ALTER TABLE app_settings MODIFY setting_value VARCHAR(2048) NOT NULL'
+fi
 runuser -u unbound-web -- php8.4 -r 'require $argv[1]; db()->query("SELECT id FROM metrics LIMIT 1");' "$dest/app/bootstrap.php"
 runuser -u unbound-web -- php8.4 "$dest/bin/seed-domains.php"
+runuser -u unbound-web -- php8.4 "$dest/bin/seed-filters.php"
 
 step 'Menyiapkan PHP-FPM dan cron'
 pool=/etc/php/8.4/fpm/pool.d/unbound-web.conf
@@ -183,8 +193,18 @@ if ! php-fpm8.4 -t; then
     if [[ -f $tmp/previous-pool ]]; then cp -p "$tmp/previous-pool" "$pool"; else unlink "$pool"; fi
     die 'Konfigurasi PHP-FPM ditolak. Periksa error php-fpm8.4 di atas.'
 fi
+# sudo helpers inherit the FPM mount namespace. Keep ProtectSystem=full and allow
+# only the configuration directories managed by the panel to be writable by root.
+install -d -m 0755 /etc/systemd/system/php8.4-fpm.service.d
+cat > "$tmp/fpm-access" <<'UNIT'
+[Service]
+ReadWritePaths=-/etc/unbound -/etc/cron.d -/etc/zabbix
+UNIT
+install -m 0644 "$tmp/fpm-access" /etc/systemd/system/php8.4-fpm.service.d/unbound-web.conf
+systemctl daemon-reload
 systemctl enable --now php8.4-fpm cron
-systemctl reload php8.4-fpm
+# A reload does not recreate the service's filesystem namespace.
+systemctl restart php8.4-fpm
 for attempt in {1..20}; do
     [[ ! -S /run/php/unbound-web.sock ]] || break
     sleep 1
@@ -195,8 +215,33 @@ for file in worker.lock cpu.sample system-status.json; do
     path="/var/lib/unbound-web/$file"
     if [[ -f $path && ! -L $path ]]; then chown -h unbound-web:unbound-web "$path"; fi
 done
-printf '* * * * * unbound-web /usr/bin/php8.4 /opt/www/unbound-web/bin/worker.php\n' > "$tmp/cron"
-install -m 0644 "$tmp/cron" /etc/cron.d/unbound-web
+if [[ -f /etc/cron.d/unbound-web ]]; then unlink /etc/cron.d/unbound-web; fi
+cat > "$tmp/monitor-unit" <<'UNIT'
+[Unit]
+Description=Unbound Web Manager live monitoring (1 second)
+After=network.target mysql.service unbound.service
+
+[Service]
+Type=simple
+User=unbound-web
+Group=unbound-web
+ExecStart=/usr/bin/python3 -I /opt/www/unbound-web/bin/monitor.py
+Restart=always
+RestartSec=1
+KillMode=control-group
+TimeoutStopSec=25
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+install -m 0644 "$tmp/monitor-unit" /etc/systemd/system/unbound-web-monitor.service
+systemctl daemon-reload
+systemctl enable unbound-web-monitor
+systemctl restart unbound-web-monitor
 
 step "Menyiapkan HTTPS untuk $host"
 install -d -m 0700 "$conf/tls"
@@ -230,7 +275,7 @@ server {
         include fastcgi_params;
         fastcgi_param SCRIPT_FILENAME $dest/public/index.php;
         fastcgi_param HTTPS \$https if_not_empty;
-        fastcgi_read_timeout 650s;
+        fastcgi_read_timeout 1250s;
         fastcgi_buffering off;
         fastcgi_pass unix:/run/php/unbound-web.sock;
     }
@@ -246,7 +291,7 @@ if ! nginx -t; then
 fi
 systemctl enable --now nginx
 systemctl reload nginx
-for unit in mysql php8.4-fpm nginx cron; do
+for unit in mysql php8.4-fpm nginx cron unbound-web-monitor; do
     systemctl is-active --quiet "$unit" || die "Layanan $unit belum aktif. Cek journalctl -u $unit -n 50."
 done
 step 'Memeriksa akses HTTPS dan halaman login'

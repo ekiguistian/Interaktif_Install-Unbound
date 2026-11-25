@@ -84,7 +84,7 @@ try {
     rename($statusTemp, $statusPath);
     $stats = '';
     if ($services['unbound'] === 'active') {
-        $statsResult = CommandRunner::run(['/usr/bin/sudo', '-n', '/usr/local/sbin/unbound-web-manage', 'stats'], 8);
+        $statsResult = CommandRunner::run(['/usr/bin/sudo', '-n', '/usr/local/sbin/unbound-web-manage', 'stats-live'], 2);
         if ($statsResult['code'] !== 0) {
             error_log('Statistik Unbound gagal: ' . trim($statsResult['output']));
         }
@@ -129,6 +129,7 @@ try {
     }
     $system = systemMetrics();
     $sample = [
+        'collected_at' => microtime(true),
         'interfaces' => $interfaces,
         'dns' => preg_match('/^total\.num\.queries=\d+$/m', $stats) === 1,
         'dns_uptime' => readStat($stats, 'time.up'),
@@ -138,7 +139,7 @@ try {
     $pdo = db();
     $previous = $pdo->query('SELECT UNIX_TIMESTAMP(recorded_at) AS epoch,total_queries,sample_json FROM metrics ORDER BY id DESC LIMIT 1')->fetch();
     $last = json_decode((string)($previous['sample_json'] ?? ''), true);
-    $elapsed = $previous ? time() - (int)$previous['epoch'] : 0;
+    $elapsed = $previous ? $sample['collected_at'] - (float)($last['collected_at'] ?? $previous['epoch']) : 0;
     $sample['qps'] = null;
     if ($elapsed > 0 && $sample['dns'] && ($last['dns'] ?? false)
         && $sample['boot'] === $last['boot'] && $sample['dns_uptime'] >= $last['dns_uptime']
@@ -148,14 +149,26 @@ try {
     $qps = $sample['qps'] ?? 0;
     $primary = $interfaces[app_env('NET_INTERFACE')] ?? ['rx' => 0, 'tx' => 0];
     $system = array_map(static fn($value) => $value ?? 0, $system);
-    $insert = $pdo->prepare('INSERT INTO metrics (recorded_at,total_queries,total_replies,cache_hits,cache_hit_ratio,qps,rx_bytes,tx_bytes,query_types_json,response_codes_json,recursion_avg_ms,cpu_percent,load_1m,load_5m,load_15m,memory_used_mb,memory_total_mb,disk_used_gb,disk_total_gb,uptime_seconds,sample_json) VALUES (NOW(),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+    $insert = $pdo->prepare('INSERT INTO metrics (recorded_at,total_queries,total_replies,cache_hits,cache_hit_ratio,qps,rx_bytes,tx_bytes,query_types_json,response_codes_json,recursion_avg_ms,cpu_percent,load_1m,load_5m,load_15m,memory_used_mb,memory_total_mb,disk_used_gb,disk_total_gb,uptime_seconds,sample_json) VALUES (FROM_UNIXTIME(?),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
     $insert->execute([
+        (int)$sample['collected_at'],
         $queries, $replies, $hits, round($cacheRatio, 4), round($qps, 4), $primary['rx'], $primary['tx'],
         json_encode($queryTypes, JSON_UNESCAPED_SLASHES), json_encode($responseCodes, JSON_UNESCAPED_SLASHES),
         round($recursionMs, 4), $system['cpu_percent'] ?? 0, $system['load_1m'], $system['load_5m'], $system['load_15m'],
         $system['memory_used_mb'], $system['memory_total_mb'], $system['disk_used_gb'], $system['disk_total_gb'], $system['uptime_seconds'], json_encode($sample, JSON_THROW_ON_ERROR),
     ]);
-    $pdo->exec('DELETE FROM metrics WHERE recorded_at < NOW() - INTERVAL 30 DAY');
+    // Keep recent seconds, then one sample per minute, so 1 Hz does not grow the
+    // database to millions of rows. Maintenance runs once a minute, not per sample.
+    $maintenance = '/var/lib/unbound-web/metrics-maintenance';
+    if (!is_file($maintenance) || time() - (int)filemtime($maintenance) >= 60) {
+        $pdo->exec('DELETE FROM metrics WHERE recorded_at < NOW() - INTERVAL 30 DAY LIMIT 5000');
+        $pdo->exec('DELETE old FROM metrics old INNER JOIN (
+            SELECT MAX(id) AS keep_id, FLOOR(UNIX_TIMESTAMP(recorded_at)/60) AS minute
+            FROM metrics WHERE recorded_at < NOW() - INTERVAL 10 MINUTE GROUP BY minute
+        ) retained ON FLOOR(UNIX_TIMESTAMP(old.recorded_at)/60)=retained.minute
+        WHERE old.recorded_at < NOW() - INTERVAL 10 MINUTE AND old.id<>retained.keep_id');
+        touch($maintenance);
+    }
     printf("Metrik disimpan. Query %d, reply %d, cache %.2f%%, %.2f QPS, CPU %.1f%%.\n", $queries, $replies, $cacheRatio, $qps, $system['cpu_percent']);
 } catch (Throwable $error) {
     error_log('Unbound Web worker: ' . $error->getMessage());

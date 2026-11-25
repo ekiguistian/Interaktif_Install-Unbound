@@ -2,11 +2,13 @@
 """Fixed administrative operations for the Unbound web panel."""
 import contextlib
 import fcntl
+import glob
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -16,6 +18,8 @@ UNBOUND = Path("/etc/unbound/unbound.conf")
 FILTER_CRON = Path("/etc/cron.d/unbound-web-filters")
 WORKER_CRON = Path("/etc/cron.d/unbound-web")
 HELPER = "/usr/local/sbin/unbound-web-manage"
+CONTROL_CACHE = Path("/var/lib/unbound-web-filters/control-client.conf")
+CONTROL_META = CONTROL_CACHE.with_suffix(".json")
 AGENTS = {
     "zabbix-agent2": Path("/etc/zabbix/zabbix_agent2.conf"),
     "zabbix-agent": Path("/etc/zabbix/zabbix_agentd.conf"),
@@ -24,6 +28,14 @@ AGENTS = {
 
 def command(*args):
     subprocess.run(args, check=True)
+
+
+def host_command(*args):
+    # Long-running root jobs and validation get their own unit. An OOM during
+    # validation must return a failure, rather than stopping the FPM service.
+    return ["/usr/bin/systemd-run", "--quiet", "--wait", "--pipe", "--collect",
+            "--service-type=exec", "--property=OOMPolicy=continue",
+            "--property=OOMScoreAdjust=500", "--", *args]
 
 
 def active(unit):
@@ -69,6 +81,75 @@ def atomic(path, content, mode=0o644, owner=None):
         Path(name).unlink(missing_ok=True)
 
 
+def control_config():
+    """Read connection options without reparsing managed DNS zones every second."""
+    def stamp(path):
+        info = Path(path).stat()
+        return [info.st_mtime_ns, info.st_size, info.st_ino]
+
+    with open("/run/unbound-web-client.lock", "a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            metadata = json.loads(CONTROL_META.read_text())
+            if (CONTROL_CACHE.is_file() and metadata.get("files")
+                    and all(stamp(path) == value for path, value in metadata["files"].items())):
+                return CONTROL_CACHE
+        except (OSError, ValueError, TypeError, KeyError):
+            pass
+        watched, server, remote = {}, [], []
+        managed = {Path("/etc/unbound/blocklist/blocklist.conf"),
+                   Path("/etc/unbound/unbound.conf.d/90-unbound-web-blocklist.conf")}
+        remote_keys = {"control-enable", "control-interface", "control-port", "control-use-cert",
+                       "server-key-file", "server-cert-file", "control-key-file", "control-cert-file"}
+
+        def read(path, section="", stack=()):
+            path = path.resolve()
+            if path in managed:
+                return section
+            if path in stack or len(stack) >= 128:
+                raise ValueError("Include konfigurasi Unbound berulang atau terlalu dalam.")
+            watched[str(path)] = stamp(path)
+            with path.open() as source:
+                for line in source:
+                    match = re.match(r"^\s*([a-zA-Z0-9_-]+):\s*(.*)$", line)
+                    if not match:
+                        continue
+                    key, text = match.groups()
+                    if key not in remote_keys | {"directory", "chroot", "include", "include-toplevel"}:
+                        if not text.split("#", 1)[0].strip():
+                            section = key
+                        continue
+                    values = shlex.split(text, comments=True)
+                    if len(values) != 1:
+                        raise ValueError("Opsi kontrol Unbound tidak valid: " + key)
+                    value = values[0]
+                    if key in ("include", "include-toplevel"):
+                        pattern = value if value.startswith("/") else "/etc/unbound/" + value
+                        # Directory stamps also detect new files matching an include glob.
+                        prefix = re.split(r"[?*\[]", pattern, maxsplit=1)[0]
+                        directory = Path(prefix).parent
+                        if directory.is_dir():
+                            watched[str(directory)] = stamp(directory)
+                        for child in sorted(glob.glob(pattern)):
+                            result = read(Path(child), "" if key == "include-toplevel" else section, (*stack, path))
+                            if key == "include":
+                                section = result
+                    elif section == "remote-control" and key in remote_keys:
+                        remote.append((key, value))
+                    elif section == "server" and key in ("directory", "chroot"):
+                        server.append((key, value))
+            return section
+
+        read(UNBOUND)
+        if any(stamp(path) != value for path, value in watched.items()):
+            raise ValueError("Konfigurasi berubah saat membaca opsi kontrol. Coba lagi.")
+        body = "server:\n" + "".join(f"    {key}: {json.dumps(value, ensure_ascii=False)}\n" for key, value in server)
+        body += "remote-control:\n" + "".join(f"    {key}: {json.dumps(value, ensure_ascii=False)}\n" for key, value in remote)
+        atomic(CONTROL_CACHE, body.encode(), 0o600)
+        atomic(CONTROL_META, json.dumps({"files": watched}).encode(), 0o600)
+        return CONTROL_CACHE
+
+
 @contextlib.contextmanager
 def lock():
     with open("/run/unbound-web-control.lock", "a") as handle:
@@ -98,7 +179,12 @@ def editor(operation, name, revision=None):
             os.fchown(staged.fileno(), *attrs[1])
             os.fchmod(staged.fileno(), attrs[0])
         if name == "unbound":
-            command("unbound-checkconf", candidate)
+            command(*host_command("/usr/sbin/unbound-checkconf", candidate))
+            daemon_user = subprocess.check_output(
+                host_command("/usr/sbin/unbound-checkconf", "-o", "username", candidate), text=True
+            ).strip()
+            if daemon_user:
+                command(*host_command("/usr/sbin/runuser", "-u", daemon_user, "--", "/usr/sbin/unbound-checkconf", candidate))
         else:
             binary = "zabbix_agent2" if unit == "zabbix-agent2" else "zabbix_agentd"
             help_text = subprocess.check_output([binary, "--help"], text=True)
@@ -130,13 +216,15 @@ def flags():
 
 
 def sync(bits):
-    command("/usr/bin/php8.4", str(APP / "bin/blocklist-sync.php"), *bits)
+    command(*host_command("/usr/bin/php8.4", str(APP / "bin/blocklist-sync.php"), *bits))
 
 
 def main(args):
     op, *params = args
     if op.startswith("firewall-"):
-        command("/usr/bin/php8.4", str(APP / "bin/firewall.php"), op.removeprefix("firewall-"), *params)
+        # UFW also updates kernel network settings. Run this fixed helper through
+        # PID 1, outside FPM's read-only mounts / ProtectKernelTunables sandbox.
+        command(*host_command("/usr/bin/php8.4", str(APP / "bin/firewall.php"), op.removeprefix("firewall-"), *params))
     elif op == "service-status" and not params:
         print("unbound=" + active("unbound"))
         zabbix = next((unit for unit in AGENTS if active(unit) == "active"), None)
@@ -146,14 +234,16 @@ def main(args):
             match = re.search(r"Version\s+([\d.]+)", version.stdout)
             if match:
                 print("unbound_version=" + match[1])
-    elif op == "stats" and not params:
-        command("unbound-control", "-c", str(UNBOUND), "stats_noreset")
+    elif op in ("stats", "stats-live") and not params:
+        subprocess.run(["unbound-control", "-c", str(control_config()), "stats_noreset"],
+                       check=True, timeout=0.6 if op == "stats-live" else 8)
     elif op == "config-read" and len(params) == 1:
         editor(op, *params)
     elif op == "filters-state" and not params:
         block, white = flags()
         print(json.dumps(dict(block=block == "1", white=white == "1")))
     elif op == "cron-view" and not params:
+        print("Monitoring: unbound-web-monitor.service / interval 1 detik / " + active("unbound-web-monitor"))
         for path in [WORKER_CRON, FILTER_CRON]:
             if path.is_file():
                 print(path.read_text(), end="")
@@ -162,7 +252,7 @@ def main(args):
             if op == "config-save" and len(params) == 2:
                 editor(op, *params)
             elif op in ("unbound-restart", "unbound-reload") and not params:
-                command("unbound-checkconf", str(UNBOUND))
+                command(*host_command("/usr/sbin/unbound-checkconf", str(UNBOUND)))
                 command("systemctl", op.split("-")[1], "unbound")
             elif op == "update-blocklists" and not params:
                 bits = flags()
@@ -176,15 +266,19 @@ def main(args):
                 ).exists():
                     print("Filter nonaktif.")
                     return
-                sync(params)
+                previous_cron = FILTER_CRON.read_bytes() if FILTER_CRON.exists() else None
                 try:
                     if "1" in params:
                         body = f"# filters {' '.join(params)}\n15 3 * * * root {HELPER} update-blocklists\n"
                         atomic(FILTER_CRON, body.encode())
                     else:
                         FILTER_CRON.unlink(missing_ok=True)
-                except OSError:
-                    sync(old)
+                    sync(params)
+                except (OSError, subprocess.SubprocessError):
+                    if previous_cron is None:
+                        FILTER_CRON.unlink(missing_ok=True)
+                    else:
+                        atomic(FILTER_CRON, previous_cron)
                     raise
                 print("Jadwal sinkronisasi diperbarui.")
             else:

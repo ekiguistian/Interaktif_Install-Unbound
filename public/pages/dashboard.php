@@ -12,7 +12,7 @@ $charts = [
 <div data-dashboard>
   <section class="panel host-strip"><div><strong id="host">Memuat server…</strong><p id="system-info"></p></div>
     <div><span>Unbound</span><strong id="service">—</strong></div>
-    <div><span>Sampel terakhir · interval 1 menit</span><strong id="sample" role="status">Menunggu worker</strong></div>
+    <div><span>Sampel terakhir · interval 1 detik</span><strong id="sample" role="status">Menunggu worker</strong></div>
   </section>
   <div class="monitor-grid">
   <?php foreach ($charts as $key=>$label): ?>

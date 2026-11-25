@@ -4,12 +4,12 @@ declare(strict_types=1);
 final class CommandRunner
 {
     /** @param list<string> $argv */
-    private static function command(array $argv): string
+    private static function command(array $argv): array
     {
         if ($argv === []) {
             throw new InvalidArgumentException('Perintah kosong.');
         }
-        return implode(' ', array_map('escapeshellarg', $argv));
+        return $argv;
     }
 
     /** @param list<string> $argv @return array{code:int,output:string} */
@@ -20,7 +20,7 @@ final class CommandRunner
         if ($stdin === false) throw new RuntimeException('Gagal membuka input proses.');
         if ($input !== null) { fwrite($stdin, $input); rewind($stdin); }
         $descriptor = [0 => $stdin, 1 => ['pipe', 'w'], 2 => ['redirect', 1]];
-        $process = proc_open($command . ' 2>&1', $descriptor, $pipes, null, ['PATH' => '/usr/sbin:/usr/bin:/sbin:/bin']);
+        $process = proc_open($command, $descriptor, $pipes, null, ['PATH' => '/usr/sbin:/usr/bin:/sbin:/bin']);
         if (!is_resource($process)) {
             return ['code' => 127, 'output' => 'Perintah sistem tidak dapat dijalankan.'];
         }
@@ -59,7 +59,7 @@ final class CommandRunner
     {
         $command = self::command($argv);
         $descriptor = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['redirect', 1]];
-        $process = proc_open($command . ' 2>&1', $descriptor, $pipes, null, ['PATH' => '/usr/sbin:/usr/bin:/sbin:/bin']);
+        $process = proc_open($command, $descriptor, $pipes, null, ['PATH' => '/usr/sbin:/usr/bin:/sbin:/bin']);
         if (!is_resource($process)) {
             echo 'data: ' . json_encode(['output' => "Gagal menjalankan proses sistem.\n"], JSON_UNESCAPED_SLASHES) . "\n\n";
             flush();

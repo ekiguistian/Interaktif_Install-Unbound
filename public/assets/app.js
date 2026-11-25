@@ -103,7 +103,7 @@
   let payload;
   function plot(key, series, unit) {
     if (!window.Chart) return;
-    const labels = payload.history.map(row => row.recorded_at.slice(11,16));
+    const labels = payload.history.map(row => row.recorded_at.slice(11,19));
     const datasets = series.map(([label, data], i) => ({
       label, data, borderColor:i ? '#a5b4fc' : '#2dd4bf', pointRadius:1, borderWidth:2
     }));
@@ -126,7 +126,7 @@
     show('host', payload.host);
     show('system-info', payload.os + ' · kernel ' + payload.kernel);
     show('service', [payload.services.unbound, payload.services.unbound_version, latest.epoch && latest.total_queries == null ? 'statistik belum tersedia' : ''].filter(Boolean).join(' · '));
-    show('sample', latest.epoch ? latest.recorded_at + (payload.now - latest.epoch > 125 ? ' · data terlambat' : '') : 'Belum ada sampel');
+    show('sample', latest.epoch ? latest.recorded_at + (payload.now - latest.epoch > 5 ? ' · data terlambat' : '') : 'Belum ada sampel');
     for (const [key,unit] of Object.entries(units)) {
       const total = key === 'memory_used_mb' ? latest.memory_total_mb : key === 'disk_used_gb' ? latest.disk_total_gb : null;
       show('value-' + key, total == null ? fmt(latest[key], unit) : fmt(latest[key]) + ' / ' + fmt(total,unit));
@@ -149,15 +149,16 @@
   }
   byId('interface').addEventListener('change',render);
   async function refresh() {
+    const started = performance.now();
     try {
-      const response = await fetch('/api/metrics',{cache:'no-store'});
+      const response = await fetch('/api/metrics',{cache:'no-store', signal:AbortSignal.timeout(5000)});
       if (response.status === 401) { location.assign('/login'); return; }
       const data = await response.json();
       if (!response.ok) throw new Error(data.message);
       payload = data;
       render();
     } catch (error) { show('sample',error.message); }
-    setTimeout(refresh,10000);
+    setTimeout(refresh,Math.max(0,1000-(performance.now()-started)));
   }
   refresh();
 })();

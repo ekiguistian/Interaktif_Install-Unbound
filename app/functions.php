@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/CommandRunner.php';
+require_once __DIR__ . '/domains.php';
 
 function e(mixed $value): string
 {
@@ -48,24 +49,6 @@ function require_admin(bool $json = false): void
     $next = rawurlencode((string)($_SERVER['REQUEST_URI'] ?? '/settings'));
     header("Location: /login?next=$next", true, 302);
     exit;
-}
-
-function valid_domain(string $domain): bool
-{
-    $domain = rtrim(strtolower(trim($domain)), '.');
-    if (strlen($domain) < 1 || strlen($domain) > 253 || filter_var($domain, FILTER_VALIDATE_IP)) {
-        return false;
-    }
-    $labels = explode('.', $domain);
-    if (count($labels) < 2) {
-        return false;
-    }
-    foreach ($labels as $label) {
-        if (strlen($label) < 1 || strlen($label) > 63 || !preg_match('/^(?!-)[a-z0-9-]+(?<!-)$/', $label)) {
-            return false;
-        }
-    }
-    return true;
 }
 
 function valid_ip_or_cidr(string $value): bool

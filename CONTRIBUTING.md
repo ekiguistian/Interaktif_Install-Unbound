@@ -19,6 +19,8 @@ find app bin public -name '*.php' -exec php -l {} \;
 node --check public/assets/app.js
 bash -n install.sh
 python3 -m py_compile bin/manage.py
+python3 -m py_compile bin/monitor.py
+php tests/filters.php
 ```
 
 Untuk perubahan login, cek akses halaman dan API saat belum login. Untuk editor konfigurasi, uji input valid, input salah, dan file yang berubah saat editor masih terbuka. Untuk grafik, bandingkan data panel dengan data dari server pada waktu yang sama.

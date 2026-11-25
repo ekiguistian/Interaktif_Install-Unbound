@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require_once __DIR__ . '/../../app/functions.php';
+require_once __DIR__ . '/../../app/filters.php';
 require_admin(true);
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     json_response(['ok' => false, 'message' => 'Metode tidak diizinkan.'], 405);
@@ -23,21 +24,39 @@ try {
                 || strlen($content) > 1048576 || trim($content) === '') {
                 fail_validation('File atau revisi tidak valid (maksimum 1 MiB).');
             }
-            $result = manage(['config-save', $service, $revision], $content);
+            session_write_close();
+            set_time_limit(0);
+            $result = manage(['config-save', $service, $revision], $content, 600);
             json_response(['ok' => $result['code'] === 0, 'message' => trim($result['output'])], $result['code'] === 0 ? 200 : 422);
 
         case 'unbound-restart':
         case 'unbound-reload':
         case 'stats':
         case 'firewall-reload':
-            $result = manage([$action]);
+            $timeout = in_array($action, ['unbound-restart','unbound-reload'], true) ? 600 : 45;
+            if ($timeout === 600) { session_write_close(); set_time_limit(0); }
+            $result = manage([$action], null, $timeout);
             json_response(['ok' => $result['code'] === 0, 'message' => trim($result['output']) ?: 'Selesai.'], $result['code'] === 0 ? 200 : 422);
 
         case 'filters-save':
+            session_write_close();
+            set_time_limit(0);
             $block = isset($payload['block']) ? '1' : '0';
             $white = isset($payload['white']) ? '1' : '0';
-            $result = manage(['filters-save', $block, $white], null, 600);
+            $result = manage(['filters-save', $block, $white], null, 1200);
             json_response(['ok' => $result['code'] === 0, 'message' => trim($result['output'])], $result['code'] === 0 ? 200 : 422);
+
+        case 'filter-options-save':
+            $url = trim((string)($payload['whitelist_url'] ?? ''));
+            $redirect = trim((string)($payload['redirect_ip'] ?? ''));
+            if ($url !== '' && !valid_public_https_url($url)) fail_validation('URL whitelist harus HTTPS publik. Kosongkan jika hanya memakai whitelist manual.');
+            if (filter_var($redirect, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) === false) fail_validation('Masukkan IPv4 redirect yang valid.');
+            $pdo->beginTransaction();
+            $save = $pdo->prepare('INSERT INTO app_settings (setting_key,setting_value) VALUES (?,?) ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)');
+            $save->execute(['whitelist_url', $url]);
+            $save->execute(['blocklist_redirect_ip', $redirect]);
+            $pdo->commit();
+            json_response(['ok'=>true, 'message'=>'Pengaturan disimpan. Jalankan Update & Apply Now untuk menerapkan.']);
 
         case 'blocklist-add':
             $name = trim((string)($payload['name'] ?? ''));
