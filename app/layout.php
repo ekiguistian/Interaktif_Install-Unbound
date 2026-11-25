@@ -46,6 +46,7 @@ HTML;
             ['/settings/zabbix', 'Zabbix Agent', 'fa-chart-line', $path === '/settings/zabbix'],
             ['/settings/firewall', 'Firewall', 'fa-fire', $path === '/settings/firewall'],
             ['/settings/update', 'Pembaruan', 'fa-cloud-arrow-down', $path === '/settings/update'],
+            ['/settings/account', 'Akun', 'fa-user-gear', $path === '/settings/account'],
         ];
         foreach ($links as [$href, $label, $icon, $active]) {
             $classes = $active ? 'nav-link nav-active' : 'nav-link';

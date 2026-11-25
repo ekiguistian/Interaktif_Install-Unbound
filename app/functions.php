@@ -4,6 +4,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/CommandRunner.php';
 require_once __DIR__ . '/domains.php';
+require_once __DIR__ . '/accounts.php';
 
 function e(mixed $value): string
 {
@@ -35,7 +36,18 @@ function verify_csrf(?string $token): void
 
 function admin_logged_in(): bool
 {
-    return isset($_SESSION['admin_user']) && is_string($_SESSION['admin_user']);
+    $sessionVersion = $_SESSION['admin_session_version'] ?? null;
+    if (!is_string($sessionVersion)) {
+        return false;
+    }
+    static $version;
+    try {
+        $version ??= db()->query('SELECT session_version FROM panel_account WHERE id=1')->fetchColumn();
+        return is_string($version) && hash_equals($version, $sessionVersion);
+    } catch (Throwable $error) {
+        error_log('Unbound Web session: ' . $error->getMessage());
+        return false;
+    }
 }
 
 function require_admin(bool $json = false): void

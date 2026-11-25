@@ -5,7 +5,7 @@ Panel HTTPS untuk monitor dan kontrol Unbound di Ubuntu Server 22.04 LTS. Login 
 ## Dependensi
 
 - **Server**: Ubuntu 22.04 LTS, systemd, akses `sudo`, Unbound, dan akses ke APT serta GitHub.
-- **Dipasang oleh installer**: Git, Nginx, MySQL 8, PHP 8.4 CLI/FPM dengan PDO MySQL, Python 3, OpenSSL, curl, rsync, cron, iproute2, dan dnsperf. Installer menambahkan PPA Ondřej jika paket PHP 8.4 belum tersedia.
+- **Dipasang oleh installer**: Git, Nginx, MySQL 8, PHP 8.4 CLI/FPM dengan PDO MySQL, OpenSSL, dan Argon2id, serta Python 3, curl, rsync, cron, iproute2, dan dnsperf. Installer menambahkan PPA Ondřej jika paket PHP 8.4 belum tersedia.
 - **Opsional**: `unbound-anchor` untuk mengelola trust anchor DNSSEC, UFW untuk menu Firewall, dan Zabbix Agent atau Agent 2 untuk ekspor metrik.
 
 ## Instalasi awal
@@ -28,7 +28,7 @@ cd Unbound_DNS_Web-Manager &&
 sudo bash ./install.sh
 ```
 
-Buka URL HTTPS dan login dengan akun yang ditampilkan installer. Akses panel memakai TCP 443. Untuk menentukan alamat sendiri, jalankan `sudo env WEB_HOST=dns.example.net bash ./install.sh`. Sertifikat HTTPS awal bersifat self-signed.
+Masukkan email pemulihan saat diminta, lalu buka URL HTTPS dan login dengan akun awal yang ditampilkan. Untuk instalasi noninteraktif, isi `RECOVERY_EMAIL` melalui environment. Panel memakai TCP 443 dan sertifikat HTTPS self-signed. Gunakan `WEB_HOST` jika perlu menentukan alamat panel sendiri.
 
 ### Jika unduhan paket PHP gagal dengan HTTP 503
 
@@ -44,7 +44,7 @@ Jika pesan `503` masih muncul, tunggu beberapa menit lalu ulangi perintah yang s
 
 Panel menghitung versi dari riwayat utama `main` mulai **1.0.30**. Setiap commit baru di jalur itu menambah angka terakhir versi satu kali. MySQL menyimpan versi, hash lengkap, serta waktu pengecekan dan pemasangan.
 
-Buka **Pembaruan → Check for update**, periksa versi dan hash, lalu pilih **Pasang pembaruan**. Panel mengambil commit dari GitHub ke `/opt/www/unbound-web/.updates/` dan menjalankan `install.sh` melalui systemd. Jika gagal, cek `sudo journalctl -u unbound-web-update -n 50`.
+Buka **Pembaruan → Check for update**, periksa versi dan hash, lalu pilih **Pasang pembaruan**. Panel mengambil commit dari GitHub ke `/opt/www/unbound-web/.updates/` dan menjalankan `update.sh` melalui systemd. Jika gagal, cek `sudo journalctl -u unbound-web-update -n 50`.
 
 Untuk memperbarui lewat terminal, jalankan dari folder repo dengan riwayat Git lengkap:
 
@@ -52,8 +52,16 @@ Untuk memperbarui lewat terminal, jalankan dari folder repo dengan riwayat Git l
 cd ~/Unbound_DNS_Web-Manager &&
 git switch main &&
 git pull --ff-only origin main &&
-sudo bash ./install.sh
+sudo bash ./update.sh
 ```
+
+Pembaruan berjalan tanpa meminta email. Setelah migrasi pertama, masuk lagi dengan username dan password lama, lalu isi email pemulihan dari menu **Akun** jika belum ada.
+
+## Akun dan pemulihan
+
+Di menu **Akun**, ubah username, password, dan email pemulihan. Isi host, port, sender, dan mode SMTP, lalu aktifkan SMTP. Gunakan **STARTTLS** atau **SSL/TLS** untuk SMTP dengan autentikasi. Mode **None** mendukung relay tanpa autentikasi.
+
+Gunakan **Lupa password** di halaman login dan masukkan email pemulihan yang tersimpan di akun. Masukkan OTP dari email pada browser yang sama dalam 10 menit.
 
 ## Fitur
 

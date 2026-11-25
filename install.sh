@@ -15,8 +15,13 @@ source /etc/os-release
 src=$(cd -- "$(dirname -- "$0")" && pwd -P)
 dest=/opt/www/unbound-web
 conf=/etc/unbound-web
+mode=${1:-install}
+[[ $# = 0 || ( $# = 1 && $mode = --update ) ]] || die 'Gunakan install.sh untuk pemasangan atau update.sh untuk pembaruan.'
+if [[ $mode = --update && ! -s $conf/.env ]]; then
+    die 'Panel belum terpasang. Jalankan sudo bash install.sh untuk pemasangan awal.'
+fi
 [[ $src != "$dest" ]] || die 'Jalankan installer dari checkout proyek.'
-for file in app/bootstrap.php app/functions.php app/filters.php app/domains.php bin/manage.py bin/monitor.py bin/worker.php bin/seed-domains.php bin/seed-filters.php bin/record-config.php bin/release-store.php bin/update.py bin/zabbix-metrics.py database/schema.sql public/index.php src/dnsperf-domains.txt; do
+for file in app/bootstrap.php app/functions.php app/filters.php app/domains.php app/accounts.php app/smtp.php bin/manage.py bin/monitor.py bin/worker.php bin/seed-domains.php bin/seed-filters.php bin/seed-account.php bin/send-otp.py bin/record-config.php bin/release-store.php bin/update.py bin/zabbix-metrics.py database/schema.sql public/index.php src/dnsperf-domains.txt; do
     [[ -f $src/$file ]] || die "Source proyek tidak lengkap. File $file tidak ditemukan. Clone repositori sebelum menjalankan installer."
 done
 exec 9>/run/unbound-web-install.lock
@@ -49,7 +54,7 @@ done
 step 'Memasang MySQL, PHP 8.4, Nginx, dan dependensi panel'
 "${apt[@]}" install -y mysql-server mysql-client nginx "${php_packages[@]}" \
     openssl sudo cron curl rsync python3 dnsperf iproute2 git
-php8.4 -r 'exit(PHP_VERSION_ID >= 80400 && extension_loaded("pdo_mysql") ? 0 : 1);' || die 'PHP 8.4 atau extension pdo_mysql belum siap.'
+php8.4 -r 'exit(PHP_VERSION_ID >= 80400 && extension_loaded("pdo_mysql") && extension_loaded("openssl") && in_array("argon2id", password_algos(), true) ? 0 : 1);' || die 'PHP 8.4 membutuhkan pdo_mysql, OpenSSL, dan Argon2id.'
 
 host=${WEB_HOST:-}
 if [[ -z $host && -s $conf/web-host ]]; then
@@ -85,6 +90,21 @@ mysql=(mysql --protocol=socket --user=root --connect-timeout=10)
 "${mysql[@]}" -N -B -e 'SELECT VERSION()' || die 'Login root MySQL gagal. Jika memakai password root, siapkan /root/.my.cnf dengan bagian [client], user=root, dan password yang sesuai (chmod 600).'
 "${mysql[@]}" -N -B -e "SHOW COLLATION LIKE 'utf8mb4_0900_ai_ci'" > "$tmp/collation"
 [[ -s $tmp/collation ]] || die 'Schema panel membutuhkan MySQL 8.0 atau lebih baru.'
+
+if [[ ! -e $conf/.env ]]; then
+    step 'Menyiapkan email pemulihan akun'
+    recovery_email=${RECOVERY_EMAIL:-}
+    valid_email() {
+        printf '%s' "$recovery_email" | php8.4 -r 'require $argv[1]; exit(valid_recovery_email(stream_get_contents(STDIN)) ? 0 : 1);' "$src/app/accounts.php"
+    }
+    until valid_email; do
+        if [[ ! -t 0 || -n ${RECOVERY_EMAIL:-} ]]; then
+            die 'Isi RECOVERY_EMAIL dengan alamat yang valid atau jalankan installer dari terminal interaktif.'
+        fi
+        if [[ -n $recovery_email ]]; then echo 'Alamat email tidak valid.' >&2; fi
+        read -r -p 'Email pemulihan akun panel: ' recovery_email || die 'Email pemulihan diperlukan untuk pemasangan awal.'
+    done
+fi
 
 step 'Menyalin aplikasi dan menyiapkan akun layanan'
 id unbound-web >/dev/null 2>&1 || useradd --system --user-group --home-dir /nonexistent --shell /usr/sbin/nologin unbound-web
@@ -126,17 +146,24 @@ print("DB_HOST=127.0.0.1\nDB_NAME=unbound_web\nDB_USER=unbound_web_" + secrets.t
 print("DB_PASS=" + secrets.token_hex(24))
 print("ADMIN_USER=admin\nADMIN_PASS=" + "".join(chars))
 PY
+    printf 'ADMIN_RECOVERY_EMAIL=%s\n' "$recovery_email" >> "$tmp/env"
     install -m 0640 -o root -g unbound-web "$tmp/env" "$conf/.env"
 fi
 chown root:unbound-web "$conf/.env"
 chmod 0640 "$conf/.env"
+if [[ ! -e $conf/account.key ]]; then
+    openssl rand -hex 32 > "$tmp/account-key"
+    install -m 0640 -o root -g unbound-web "$tmp/account-key" "$conf/account.key"
+fi
+chown root:unbound-web "$conf/account.key"
+chmod 0640 "$conf/account.key"
 step 'Menyiapkan database dan migrasi'
 # Read values with the same parser as the runtime. Never source .env as shell code.
-php8.4 -r 'require $argv[1]; foreach (["DB_NAME","DB_USER","DB_HOST","DB_PASS","ADMIN_USER","ADMIN_PASS"] as $key) {
+php8.4 -r 'require $argv[1]; foreach (["DB_NAME","DB_USER","DB_HOST","DB_PASS"] as $key) {
     $v = app_env($key); if ($v === "" || strpbrk($v, "\r\n") !== false) exit(1); echo $v, "\n";
 }' "$dest/app/bootstrap.php" > "$tmp/settings"
 mapfile -t settings < "$tmp/settings"
-[[ ${#settings[@]} = 6 ]] || die 'File .env tidak memuat enam nilai kredensial yang diperlukan.'
+[[ ${#settings[@]} = 4 ]] || die 'File .env tidak memuat konfigurasi database yang diperlukan.'
 db_name=${settings[0]}
 db_user=${settings[1]}
 db_host=${settings[2]}
@@ -179,6 +206,7 @@ if [[ $settings_size -lt 2048 ]]; then
     "${mysql[@]}" "$db_name" -e 'ALTER TABLE app_settings MODIFY setting_value VARCHAR(2048) NOT NULL'
 fi
 runuser -u unbound-web -- php8.4 -r 'require $argv[1]; db()->query("SELECT id FROM metrics LIMIT 1");' "$dest/app/bootstrap.php"
+runuser -u unbound-web -- php8.4 "$dest/bin/seed-account.php"
 runuser -u unbound-web -- php8.4 "$dest/bin/seed-domains.php"
 runuser -u unbound-web -- php8.4 "$dest/bin/seed-filters.php"
 
@@ -336,10 +364,16 @@ else
     runuser -u unbound-web -- php8.4 "$dest/bin/release-store.php" forget-installed
     if [[ -f $conf/installed-commit ]]; then unlink "$conf/installed-commit"; fi
 fi
-if [[ ${UNBOUND_WEB_QUIET_CREDENTIALS:-0} = 1 ]]; then
-    printf '\nPanel siap di https://%s/\n' "$host"
+if [[ $mode = install && ${UNBOUND_WEB_QUIET_CREDENTIALS:-0} != 1 ]] && grep -q '^ADMIN_RECOVERY_EMAIL=' "$conf/.env"; then
+    php8.4 -r 'require $argv[1]; printf("\nURL       https://%s/\nUsername  %s\nPassword  %s\n", $argv[2], app_env("ADMIN_USER"), app_env("ADMIN_PASS"));' "$dest/app/bootstrap.php" "$host"
 else
-    printf '\nURL       https://%s/\nUsername  %s\nPassword  %s\n' "$host" "${settings[4]}" "${settings[5]}"
+    printf '\nPanel siap di https://%s/\n' "$host"
+fi
+if grep -Eq '^[[:space:]]*ADMIN_(USER|PASS|RECOVERY_EMAIL)[[:space:]]*=' "$conf/.env"; then
+    awk '!/^[[:space:]]*ADMIN_(USER|PASS|RECOVERY_EMAIL)[[:space:]]*=/' "$conf/.env" > "$tmp/runtime-env"
+    env_stage=$(mktemp "$conf/.env.XXXXXXXX")
+    install -m 0640 -o root -g unbound-web "$tmp/runtime-env" "$env_stage"
+    mv -fT -- "$env_stage" "$conf/.env"
 fi
 
 # System ini di buat dan hasil ide oleh Eki Guistian, Anda boleh memakai dan memdifikasi dengan syarat tetap membuka code ke public dan mencatumkan sumber dari Eki guistian. sesuai aturan opensource

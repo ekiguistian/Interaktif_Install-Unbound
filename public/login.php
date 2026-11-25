@@ -8,7 +8,7 @@ if (admin_logged_in()) {
 }
 $message = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $csrf = (string)($_POST['csrf_token'] ?? '');
+    $csrf = form_string($_POST, 'csrf_token');
     if (!hash_equals(csrf_token(), $csrf)) {
         $message = 'Sesi formulir berakhir. Muat ulang halaman.';
     } else {
@@ -16,16 +16,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $statement = db()->prepare('SELECT COUNT(*) FROM login_attempts WHERE remote_addr = ? AND attempted_at > NOW() - INTERVAL 15 MINUTE');
             $statement->execute([client_ip()]);
             $tooMany = (int)$statement->fetchColumn() >= 8;
-            $username = (string)($_POST['username'] ?? '');
-            $password = (string)($_POST['password'] ?? '');
-            $expectedUser = app_env('ADMIN_USER');
-            $expectedPass = app_env('ADMIN_PASS');
-            $valid = !$tooMany && $expectedUser !== '' && $expectedPass !== '' &&
-                !str_starts_with($expectedPass, 'replace_with_') &&
-                hash_equals($expectedUser, $username) && hash_equals($expectedPass, $password);
+            $username = form_string($_POST, 'username');
+            $password = form_string($_POST, 'password');
+            $account = panel_account(db());
+            $valid = !$tooMany && strlen($password) <= 4096 && password_verify($password, $account['password_hash'])
+                && hash_equals($account['username'], $username);
             if ($valid) {
                 session_regenerate_id(true);
-                $_SESSION['admin_user'] = $expectedUser;
+                $_SESSION = ['admin_session_version' => $account['session_version']];
                 db()->prepare('DELETE FROM login_attempts WHERE remote_addr = ?')->execute([client_ip()]);
                 $next = (string)($_POST['next'] ?? '/');
                 if (!preg_match('~^/(?:settings(?:/[a-z]+(?:-[a-z]+)*)?)?$~D', $next)) {
@@ -34,7 +32,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 header('Location: ' . $next);
                 exit;
             }
-            db()->prepare('INSERT INTO login_attempts (remote_addr) VALUES (?)')->execute([client_ip()]);
+            if (!$tooMany) {
+                db()->prepare('INSERT INTO login_attempts (remote_addr) VALUES (?)')->execute([client_ip()]);
+            }
             $message = $tooMany ? 'Terlalu banyak percobaan. Coba lagi setelah 15 menit.' : 'Username atau password tidak benar.';
         } catch (Throwable $error) {
             error_log('Unbound Web login: ' . $error->getMessage());
@@ -47,12 +47,15 @@ if (!preg_match('~^/(?:settings(?:/[a-z]+(?:-[a-z]+)*)?)?$~D', $next)) {
     $next = '/';
 }
 page_start('Login admin', false, 'login');
+$resetSuccess = !empty($_SESSION['password_reset_success']);
+unset($_SESSION['password_reset_success']);
 ?>
 <div class="login-content">
   <section class="panel login-card">
     <div class="login-icon"><i class="fa-solid fa-lock" aria-hidden="true"></i></div>
     <h1>Masuk ke panel Unbound</h1>
     <p class="mt-2 text-sm leading-6 text-slate-400">Silahkan login untuk memantau DNS Server dan melakukan configurasi</p>
+    <?php if ($resetSuccess) notice('Password sudah diubah. Masuk dengan password baru.'); ?>
     <?php if ($message !== ''): ?><div class="mt-5 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-200"><?= e($message) ?></div><?php endif; ?>
     <form method="post" class="mt-6 space-y-4">
       <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>"><input type="hidden" name="next" value="<?= e($next) ?>">
@@ -60,6 +63,7 @@ page_start('Login admin', false, 'login');
       <label class="block"><span class="mb-2 block text-sm">Password</span><input class="form-input" type="password" name="password" autocomplete="current-password" required></label>
       <button class="btn-primary w-full" type="submit"><i class="fa-solid fa-arrow-right-to-bracket" aria-hidden="true"></i>Masuk</button>
     </form>
+    <a class="mt-4 block text-sm text-cyan-300" href="/forgot-password">Lupa password?</a>
   </section>
 </div>
 <?php page_end(); ?>

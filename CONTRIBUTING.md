@@ -21,6 +21,7 @@ bash -n install.sh
 python3 -m py_compile bin/manage.py
 python3 -m py_compile bin/monitor.py
 php tests/filters.php
+php tests/accounts.php # PDO SQLite, atau set PANEL_TEST_DSN untuk MySQL uji
 python3 tests/unbound-network.py
 ```
 

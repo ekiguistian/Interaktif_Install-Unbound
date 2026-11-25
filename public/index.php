@@ -33,6 +33,7 @@ if (preg_match('~\.php$~i', $path)) {
 $routes = [
     '/' => __DIR__ . '/pages/dashboard.php',
     '/login' => __DIR__ . '/login.php',
+    '/forgot-password' => __DIR__ . '/forgot-password.php',
     '/logout' => __DIR__ . '/logout.php',
     '/settings' => __DIR__ . '/admin/index.php',
     '/settings/unbound' => __DIR__ . '/admin/unbound.php',
@@ -44,6 +45,7 @@ $routes = [
     '/settings/dnsperf' => __DIR__ . '/admin/dnsperf.php',
     '/settings/domains' => __DIR__ . '/admin/domains.php',
     '/settings/update' => __DIR__ . '/admin/update.php',
+    '/settings/account' => __DIR__ . '/admin/account.php',
     '/admin' => __DIR__ . '/admin/index.php',
     '/admin/index' => __DIR__ . '/admin/index.php',
     '/admin/unbound' => __DIR__ . '/admin/unbound.php',

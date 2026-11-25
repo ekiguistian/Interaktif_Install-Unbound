@@ -117,10 +117,10 @@ def install(commit, version):
         git("clone", "--no-tags", "--single-branch", "--branch=main", "--", REPOSITORY, str(source), timeout=120)
         if git("-C", str(source), "rev-parse", "HEAD") != commit or version_for(source, commit) != version:
             raise ValueError("Branch main berubah. Jalankan Check for update lagi.")
-        installer = source / "install.sh"
+        installer = source / "update.sh"
         if installer.is_symlink() or not installer.is_file():
-            raise ValueError("Installer tidak ditemukan di commit yang dipilih.")
-        publish("installing", commit, "Menjalankan install.sh. Panel dapat terputus sebentar.", version)
+            raise ValueError("update.sh tidak ditemukan di commit yang dipilih.")
+        publish("installing", commit, "Menjalankan update.sh. Panel dapat terputus sebentar.", version)
         environment = {"PATH": GIT_ENV["PATH"], "HOME": "/root", "UNBOUND_WEB_QUIET_CREDENTIALS": "1"}
         subprocess.run(["/usr/bin/bash", installer], cwd=source, env=environment, check=True, timeout=1800)
         installed = read_status()
