@@ -30,6 +30,16 @@ sudo bash ./install.sh
 
 Buka URL HTTPS dan login dengan akun yang ditampilkan installer. Akses panel memakai TCP 443. Untuk menentukan alamat sendiri, jalankan `sudo env WEB_HOST=dns.example.net bash ./install.sh`. Sertifikat HTTPS awal bersifat self-signed.
 
+### Jika unduhan paket PHP gagal dengan HTTP 503
+
+Jika PPA Ondřej mengembalikan `503 Service Unavailable` saat mengunduh paket PHP 8.4 dan installer berhenti dengan `exit 100`, jalankan kembali dari folder repo:
+
+```bash
+sudo apt-get update && sudo bash ./install.sh
+```
+
+Jika pesan `503` masih muncul, tunggu beberapa menit lalu ulangi perintah yang sama.
+
 ## Update dari main
 
 Setelah memasang versi ini, buka **Pembaruan → Check for update**, cek commit yang tampil, lalu pilih **Pasang pembaruan**. Panel mengambil checkout `main` dari repo GitHub proyek ke `/opt/www/unbound-web/.updates/` dan menjalankan `install.sh` melalui systemd. Status tetap tersedia setelah PHP-FPM dimulai ulang. Untuk melihat kegagalan, jalankan `sudo journalctl -u unbound-web-update -n 50`.
