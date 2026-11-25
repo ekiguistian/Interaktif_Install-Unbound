@@ -1,10 +1,10 @@
 # Unbound Web Manager
 
 ## Minimum Server :
-OS : Ubuntu Server 22.04 LTS (jammy)
-CPU : 4 Core / 4vCore
-Ram : 4GiB
-Disk : 40Gib
+- OS : Ubuntu Server 22.04 LTS (jammy)
+- CPU : 4 Core / 4vCore
+- Ram : 4GiB
+- Disk : 40Gib
 
 Panel HTTPS untuk monitor dan kontrol Unbound di Ubuntu Server 22.04 LTS. Login diperlukan untuk membuka panel.
 
