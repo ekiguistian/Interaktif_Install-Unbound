@@ -6,7 +6,7 @@
 - Ram : 4GiB
 - Disk : 40Gib
 
-Panel HTTPS untuk monitor dan kontrol Unbound di Ubuntu Server 22.04 LTS. Login diperlukan untuk membuka panel.
+Panel untuk monitor dan kontrol Unbound di Ubuntu Server 22.04 LTS. Login diperlukan untuk membuka panel.
 
 [Instalasi](#instalasi-awal) · [Pembaruan](#pembaruan) · [Fitur](#fitur) · [Blocklist dan Whitelist](#blocklist-dan-whitelist) · [Screenshot](#screenshot) · [Dukungan](#dukungan)
 
@@ -60,7 +60,7 @@ Buka **Pembaruan → Cek pembaruan**, periksa versi dan hash, lalu pilih **Pasan
 
 ### Manual lewat terminal
 
-Jalankan dari folder repo dengan riwayat Git lengkap.
+Jalankan dari folder repo dengan riwayat Git lengkap. jika belum lengkap lakukan `git pull --ff-only origin main` terlebih dahulu
 
 ```bash
 cd ~/Unbound_DNS_Web-Manager &&
@@ -95,23 +95,19 @@ Dari halaman masuk, pilih **Lupa password** dan masukkan email pemulihan. Masukk
 ## Blocklist dan Whitelist
 
 ### Tambahkan sumber
+File sumber bisa menggunakan format txt,json dan csv
 
 1. Buka **Unbound → Blocklist & Whitelist**.
 2. Di **Sumber blocklist**, isi nama dan URL HTTPS publik. Sumber mendukung daftar domain, hosts, URL, Adblock, CSV, dan JSON.
 3. Isi **URL sumber whitelist** untuk daftar pengecualian dari URL, atau masukkan domain secara langsung di **Whitelist manual**.
 
 ### Aktifkan dan sinkronkan filter
+- Untuk memuat file whitelist dan blocklist kedalam Konfigurasi server, gunakan tombol masukan blocklist / whitelist, pada bagian bawah control. lalu lakukan sinkronisasi.
 
-Pilih **Aktifkan Blocklist** atau **Aktifkan Whitelist**. Panel menambahkan include untuk filter yang dipilih di bagian `server:` pada `/etc/unbound/unbound.conf`.
-
-```conf
-    include: "/etc/unbound/blocklist/blocklist.conf"
-    include: "/etc/unbound/blocklist/whitelist.conf"
-```
-
-Klik **Sinkronkan sekarang** untuk menerapkan perubahan sumber. Filter aktif juga disinkronkan setiap hari pukul 03.15 waktu server. Tombol **Nonaktifkan** menghapus include untuk filter terkait.
+- Klik **Sinkronkan sekarang** untuk menerapkan perubahan sumber. Filter aktif juga disinkronkan setiap hari pukul 03.15 waktu server. Tombol **Nonaktifkan** menghapus include untuk filter terkait.
 
 ### Contoh URL sumber
+Url dibawah juga bisa digunakan sebagai sumber, untuk kebutuhan produksi anda silahkan gunakan sumber yang anda sukai dan sumber terpercaya.
 
 **Whitelist** · [Buka daftar domain Eki Guistian](https://raw.githubusercontent.com/ekiguistian/whitelist-host/refs/heads/main/whitelist-domain.txt)
 
