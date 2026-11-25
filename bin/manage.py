@@ -1,10 +1,12 @@
 #!/usr/bin/python3 -I
 """Fixed administrative operations for the Unbound web panel."""
 import contextlib
+from collections import Counter
 import fcntl
 import glob
 import grp
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -199,7 +201,18 @@ def editor(operation, name, revision=None):
     old = path.read_bytes()
     digest = hashlib.sha256(old).hexdigest()
     if operation == "config-read":
-        print(json.dumps(dict(path=str(path), revision=digest, content=old.decode())))
+        state = dict(path=str(path), revision=digest, content=old.decode())
+        if name == "unbound":
+            try:
+                with lock():
+                    old = path.read_bytes()
+                    state.update(revision=hashlib.sha256(old).hexdigest(), content=old.decode())
+                    state["network"] = network_snapshot(state["content"])
+                    save_config_snapshot({"revision": state["revision"], "network": state["network"]})
+            except (ValueError, OSError, subprocess.SubprocessError):
+                state["network"] = network_snapshot(state["content"])
+                state["network_sync_failed"] = True
+        print(json.dumps(state))
         return
     if revision != digest:
         raise ValueError("File berubah sejak dibuka. Muat ulang sebelum menyimpan.")
@@ -207,6 +220,9 @@ def editor(operation, name, revision=None):
     if not data.strip() or len(data) > 1048576 or b"\x00" in data:
         raise ValueError("Isi file kosong atau terlalu besar.")
     validate_web_config(name, data.decode())
+    if name == "unbound":
+        if loopback_interfaces(old.decode()) - loopback_interfaces(data.decode()):
+            raise ValueError("Interface loopback yang sudah ada tidak dapat diubah atau dihapus dari editor web.")
     apply_config(unit, path, old, data, after=record_editor_config if unit == "unbound" else None)
     print("File tersimpan dan layanan sudah dimuat ulang.")
 
@@ -299,7 +315,7 @@ def checked(*args):
     return result.stdout.strip()
 
 
-def apply_config(unit, path, old, data, reload=True, after=None, before_reload=None):
+def apply_config(unit, path, old, data, reload=True, after=None, before_reload=None, restart=False):
     if not data.strip() or len(data) > 1048576 or b"\x00" in data:
         raise ValueError("Isi file kosong atau terlalu besar.")
     stat = path.stat()
@@ -330,22 +346,22 @@ def apply_config(unit, path, old, data, reload=True, after=None, before_reload=N
         os.replace(candidate, path)
     finally:
         Path(candidate).unlink(missing_ok=True)
-    if not reload:
-        return
     reload_attempted = False
     try:
-        if before_reload:
-            before_reload()
-        # Agent units without ExecReload require restart for full config changes.
-        reload_attempted = True
-        command("systemctl", "reload" if unit == "unbound" else "reload-or-restart", unit)
-        command("systemctl", "is-active", "--quiet", unit)
+        if reload:
+            if before_reload:
+                before_reload()
+            # Agent units without ExecReload require restart for full config changes.
+            reload_attempted = True
+            action = "restart" if restart else "reload" if unit == "unbound" else "reload-or-restart"
+            command("systemctl", action, unit)
+            command("systemctl", "is-active", "--quiet", unit)
         if after:
             after()
     except (ValueError, OSError, subprocess.SubprocessError):
         atomic(path, old, *attrs)
         if reload_attempted:
-            command("systemctl", "reload-or-restart", unit)
+            command("systemctl", "restart" if restart else "reload-or-restart", unit)
         raise
 
 
@@ -546,6 +562,15 @@ def set_zabbix_metrics(enabled):
 SECTION = re.compile(r"^\s*([a-z][a-z0-9-]*):\s*(?:#.*)?$", re.I)
 DIRECTIVE = re.compile(r"^(?P<indent>[ \t]*)(?P<comment>#\s*)?(?P<key>[a-z][a-z0-9-]*):[ \t]*(?P<value>.*)$", re.I)
 LEGACY = re.compile(r"(?ms)^# Unbound Web Manager (root-hints|dnssec) begin\r?\n(.*?)^# Unbound Web Manager \1 end[^\n]*\n?")
+NETWORK_LINE = re.compile(
+    r'^[ \t]*(?P<key>interface|local-zone|local-data):[ \t]*'
+    r'(?P<token>"(?:\\.|[^"\\])*"|[^ \t#"]+)(?P<tail>.*)$'
+)
+PTR_RECORD = re.compile(
+    r"[ \t]*(?P<owner>\S+)(?P<rr>[ \t]+(?:(?:IN|[0-9]+)[ \t]+){0,2}PTR[ \t]+)"
+    r"(?P<target>\S+)[ \t]*", re.I
+)
+REVERSE_ZONES = ("in-addr.arpa", "ip6.arpa")
 
 
 def server_range(lines):
@@ -562,6 +587,131 @@ def directive_args(value):
         return shlex.split(value, comments=True)
     except ValueError:
         return []
+
+
+def interface_ip(value):
+    if not re.fullmatch(r"[0-9a-fA-F:.]+(?:%[a-zA-Z0-9_.-]+)?", value):
+        return None
+    try:
+        return ipaddress.ip_address(value)
+    except ValueError:
+        return None
+
+
+def is_loopback(value, address):
+    if address is None:
+        return value == "lo"
+    return address.is_loopback or (
+        address.version == 6 and address.ipv4_mapped is not None and address.ipv4_mapped.is_loopback
+    )
+
+
+def is_reverse_name(name):
+    labels = name.removesuffix(".").lower().split(".")
+    return ".".join(labels[-2:]) in REVERSE_ZONES
+
+
+def dns_name(value, reverse=False):
+    name = value.strip().removesuffix(".")
+    label = r"[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?"
+    if (len(name) > 253 or not all(re.fullmatch(label, part) for part in name.split("."))
+            or (reverse and not is_reverse_name(name))):
+        message = "Gunakan nama zona atau pemilik PTR berakhiran in-addr.arpa. atau ip6.arpa." if reverse else "Masukkan nama host tujuan PTR yang valid."
+        raise ValueError(message)
+    return name + "."
+
+
+def network_snapshot(body):
+    """Read declarations in the main file. Included files are left to the Unbound editor."""
+    rows = {"interface": [], "local-zone": [], "local-data": []}
+    in_server = False
+    for index, line in enumerate(body.splitlines()):
+        if section := SECTION.fullmatch(line):
+            in_server = section[1] == "server"
+        if not in_server or not (match := NETWORK_LINE.fullmatch(line)):
+            continue
+        tokens = directive_args(match["token"])
+        if len(tokens) != 1:
+            continue
+        name = tokens[0]
+        key = match["key"]
+        tail = directive_args(match["tail"])
+        if key == "interface" and not tail:
+            value, _, port = name.partition("@")
+            address = interface_ip(value)
+            loopback = is_loopback(value, address)
+            rows[key].append(dict(line=index, value=name, address=value, port=port,
+                                  loopback=loopback, editable=address is not None and not loopback))
+        elif key == "local-zone" and len(tail) == 1 and is_reverse_name(name):
+            rows[key].append(dict(line=index, name=name, mode=tail[0], editable=True))
+        elif key == "local-data" and not tail:
+            record = PTR_RECORD.fullmatch(name)
+            if record and is_reverse_name(record["owner"]):
+                rows[key].append(dict(line=index, name=record["owner"], target=record["target"], editable=True))
+    return rows
+
+
+def loopback_interfaces(body):
+    return Counter(row["value"] for row in network_snapshot(body)["interface"] if row["loopback"])
+
+
+def edit_network(body, index, values):
+    key, value = values.get("kind"), values.get("value")
+    if not isinstance(key, str) or not isinstance(value, str):
+        raise ValueError("Data interface atau Reverse DNS tidak valid.")
+    entry = next((row for row in network_snapshot(body).get(key, []) if row["line"] == index), None)
+    if entry is None or not entry["editable"]:
+        raise ValueError("Baris tidak tersedia untuk diedit. Muat ulang halaman.")
+
+    lines = body.splitlines(keepends=True)
+    line = lines[index].rstrip("\r\n")
+    match = NETWORK_LINE.fullmatch(line)
+    if key == "interface":
+        value = value.strip()
+        address = interface_ip(value)
+        if address is None or is_loopback(value, address):
+            raise ValueError("Masukkan alamat IP non-loopback yang valid.")
+        if entry["port"]:
+            value += "@" + entry["port"]
+    elif key == "local-zone":
+        value = dns_name(value, reverse=True)
+    else:
+        target = values.get("target")
+        if not isinstance(target, str):
+            raise ValueError("Masukkan nama host tujuan PTR.")
+        record = PTR_RECORD.fullmatch(directive_args(match["token"])[0])
+        value = dns_name(value, reverse=True) + record["rr"] + dns_name(target)
+
+    if key != "interface" or match["token"].startswith('"'):
+        value = f'"{value}"'
+    start, end = match.span("token")
+    lines[index] = line[:start] + value + lines[index][end:]
+    return "".join(lines)
+
+
+def save_network(revision, line):
+    path = trusted_config_path(UNBOUND, Path("/etc/unbound"))
+    old = path.read_bytes()
+    if revision != hashlib.sha256(old).hexdigest():
+        raise ValueError("File berubah sejak dibuka. Muat ulang sebelum menyimpan.")
+    if not re.fullmatch(r"[0-9]{1,7}", line):
+        raise ValueError("Baris konfigurasi tidak valid.")
+    values = json.loads(sys.stdin.buffer.read(4097))
+    if not isinstance(values, dict):
+        raise ValueError("Data konfigurasi tidak valid.")
+    content = edit_network(old.decode(), int(line), values)
+    data = content.encode()
+    if data == old:
+        record_config()
+        print("Tidak ada perubahan. Data sudah disinkronkan ke database.")
+        return
+    validate_web_config("unbound", content)
+    restart = values["kind"] == "interface"
+    running = active("unbound") == "active"
+    apply_config("unbound", path, old, data, reload=running, after=record_config, restart=restart)
+    action = "direstart" if restart else "dimuat ulang"
+    print(f"Konfigurasi tersimpan dan Unbound sudah {action}." if running
+          else "Konfigurasi tersimpan. Perubahan berlaku saat Unbound dijalankan.")
 
 
 def include_target(line):
@@ -726,7 +876,13 @@ def record_config():
     state = filter_state()
     metadata = json.loads(CONTROL_META.read_text())
     content = UNBOUND.read_bytes().decode()
-    payload = json.dumps({"content": content, "filters": state, "resolver": metadata["features"]}, ensure_ascii=False)
+    save_config_snapshot({"content": content, "filters": state, "resolver": metadata["features"],
+                          "network": network_snapshot(content),
+                          "revision": hashlib.sha256(content.encode()).hexdigest()})
+
+
+def save_config_snapshot(snapshot):
+    payload = json.dumps(snapshot, ensure_ascii=False)
     result = subprocess.run(["/usr/bin/php8.4", str(APP / "bin/record-config.php")],
                             input=payload, capture_output=True, text=True, timeout=15)
     if result.returncode != 0:
@@ -947,6 +1103,8 @@ def main(args):
         with lock():
             if op == "config-save" and len(params) == 2:
                 editor(op, *params)
+            elif op == "unbound-network-save" and len(params) == 2:
+                save_network(*params)
             elif op in ("zabbix-metrics-enable", "zabbix-metrics-disable") and not params:
                 set_zabbix_metrics(op.endswith("-enable"))
             elif op == "unbound-logging-set" and len(params) == 2 and params[0] in LOG_OPTIONS and params[1] in ("yes", "no"):

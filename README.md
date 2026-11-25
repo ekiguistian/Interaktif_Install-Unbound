@@ -61,6 +61,7 @@ sudo bash ./install.sh
 |---|---|
 | **Monitor** | QPS, cache, latensi, CPU, RAM, disk, dan RX/TX. Dashboard diperbarui per detik dengan riwayat 10 menit. |
 | **Unbound** | Cek, simpan, reload, start/stop, root hints, DNSSEC, dan sertifikat TLS remote-control. Perubahan konfigurasi yang berhasil disimpan ke file dan database. |
+| **Interface & Reverse DNS** | Baca interface, zona reverse, dan record PTR yang ditulis di bagian `server:` pada `/etc/unbound/unbound.conf`. Loopback hanya bisa dibaca. IP lain bisa diedit per interface. Perubahan IP me-restart Unbound, sementara perubahan zona dan PTR memakai reload saat layanan aktif. Data tersimpan ke database. |
 | **Live Log** | Baca 40 entri journal terakhir dan ikuti log baru. Log query dan reply punya toggle terpisah. **Stop** menghentikan sesi log. |
 | **Cron / Uji DNS** | Lihat status monitoring dan jadwal filter. Jalankan satu pengujian dnsperf sekaligus ke IPv4 privat atau loopback, maksimal 16 client, 4 thread, dan 1.000 QPS. |
 | **Zabbix Agent** | Edit konfigurasi agen atau aktifkan item `unbound.web.metrics` untuk total query, total reply, QPS, dan metrik Linux. Lihat [panduan item dan grafik Zabbix](docs/zabbix.md). |

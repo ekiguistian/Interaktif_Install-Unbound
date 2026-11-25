@@ -48,6 +48,24 @@ try {
             }
             json_response(['ok'=>true, 'state'=>$state]);
 
+        case 'unbound-network-save':
+            $revision = $payload['revision'] ?? '';
+            $line = $payload['line'] ?? '';
+            $kind = $payload['kind'] ?? '';
+            $value = $payload['value'] ?? null;
+            $target = $payload['target'] ?? '';
+            if (!is_string($revision) || !preg_match('/^[a-f0-9]{64}$/D', $revision)
+                || !is_string($line) || !preg_match('/^[0-9]{1,7}$/D', $line)
+                || !in_array($kind, ['interface', 'local-zone', 'local-data'], true)
+                || !is_string($value) || strlen($value) > 254 || trim($value) === ''
+                || !is_string($target) || strlen($target) > 254) {
+                fail_validation('Data interface atau Reverse DNS tidak valid.');
+            }
+            session_write_close();
+            set_time_limit(0);
+            $result = manage([$action, $revision, $line], json_encode(compact('kind', 'value', 'target'), JSON_THROW_ON_ERROR), 600);
+            json_response(['ok' => $result['code'] === 0, 'message' => trim($result['output'])], $result['code'] === 0 ? 200 : 422);
+
         case 'config-save':
             $service = $payload['service'] ?? '';
             $content = $payload['content'] ?? null;
