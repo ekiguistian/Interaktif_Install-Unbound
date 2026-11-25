@@ -49,7 +49,7 @@ sudo bash ./install.sh
 |---|---|
 | **Monitor** | QPS, cache, latensi, CPU, RAM, disk, dan RX/TX. Dashboard diperbarui per detik dengan riwayat 10 menit. |
 | **Unbound** | Cek, simpan, reload, start/stop, root hints, DNSSEC, dan sertifikat TLS remote-control. Perubahan konfigurasi yang berhasil disimpan ke file dan database. |
-| **Live Log** | Buka **Unbound → Live Log** untuk membaca journal Unbound. Pilih **Mulai Live Log**, lalu **Stop** untuk menghentikan sesi. |
+| **Live Log** | Buka **Unbound → Live Log** untuk membaca journal dan mengaktifkan atau menonaktifkan log query dan reply secara terpisah. **Stop** menghentikan sesi. |
 | **Cron / Uji DNS** | Status monitoring, jadwal filter, dan uji resolver dengan dnsperf. |
 | **Zabbix Agent** | Edit konfigurasi dan muat ulang agent. Jika belum terpasang, menu menampilkan [perintah Agent 2 7.0 LTS](https://www.zabbix.com/download?zabbix=7.0&os_distribution=ubuntu&os_version=22.04&components=agent_2) untuk Ubuntu 22.04. |
 | **Firewall** | Kelola rule, status, dan reload UFW. |

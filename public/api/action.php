@@ -15,6 +15,21 @@ $action = (string)($payload['action'] ?? '');
 try {
     $pdo = db();
     switch ($action) {
+        case 'unbound-logging-set':
+            $option = $payload['option'] ?? '';
+            $value = $payload['value'] ?? '';
+            if (!in_array($option, ['log-queries', 'log-replies'], true) || !in_array($value, ['yes', 'no'], true)) {
+                fail_validation('Opsi log Unbound tidak valid.');
+            }
+            session_write_close();
+            set_time_limit(0);
+            $result = manage([$action, $option, $value], null, 600);
+            $logging = $result['code'] === 0 ? json_decode($result['output'], true) : null;
+            if (!is_array($logging)) {
+                json_response(['ok'=>false, 'message'=>trim($result['output']) ?: 'Gagal memperbarui logging.'], 422);
+            }
+            json_response(['ok'=>true, 'message'=>'Konfigurasi tersimpan dan Unbound sudah dimuat ulang.', 'logging'=>$logging]);
+
         case 'update-check':
         case 'update-run':
         case 'update-status':

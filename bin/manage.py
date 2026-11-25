@@ -29,6 +29,7 @@ ROOT_KEY = Path("/var/lib/unbound/root.key")
 FILTER_PATHS = ("/etc/unbound/blocklist/blocklist.conf", "/etc/unbound/blocklist/whitelist.conf")
 LEGACY_FILTER = Path("/etc/unbound/unbound.conf.d/90-unbound-web-blocklist.conf")
 CONTROL_FILES = ("unbound_server.key", "unbound_server.pem", "unbound_control.key", "unbound_control.pem")
+LOG_OPTIONS = ("log-queries", "log-replies")
 AGENTS = {
     "zabbix-agent2": Path("/etc/zabbix/zabbix_agent2.conf"),
     "zabbix-agent": Path("/etc/zabbix/zabbix_agentd.conf"),
@@ -104,14 +105,14 @@ def control_config():
         fcntl.flock(handle, fcntl.LOCK_EX)
         try:
             metadata = json.loads(CONTROL_META.read_text())
-            if (CONTROL_CACHE.is_file() and metadata.get("files") and "includes" in metadata
+            if (CONTROL_CACHE.is_file() and metadata.get("files") and metadata.get("version") == 2
                     and all(stamp(path) == value for path, value in metadata["files"].items())):
                 return CONTROL_CACHE
         except (OSError, ValueError, TypeError, KeyError):
             pass
         watched, server, remote = {}, [], []
         anchor_keys = {"auto-trust-anchor-file", "trust-anchor-file", "trust-anchor", "trusted-keys-file"}
-        feature_keys = {"root-hints", "module-config", "val-permissive-mode"} | anchor_keys
+        feature_keys = {"root-hints", "module-config", "val-permissive-mode", *LOG_OPTIONS} | anchor_keys
         features = {"anchors": []}
         includes = []
         managed = {Path("/etc/unbound/blocklist/blocklist.conf"),
@@ -172,7 +173,7 @@ def control_config():
         body = "server:\n" + "".join(f"    {key}: {json.dumps(value, ensure_ascii=False)}\n" for key, value in server)
         body += "remote-control:\n" + "".join(f"    {key}: {json.dumps(value, ensure_ascii=False)}\n" for key, value in remote)
         atomic(CONTROL_CACHE, body.encode(), 0o600)
-        atomic(CONTROL_META, json.dumps({"files": watched, "features": features, "includes": includes, "remote": dict(remote),
+        atomic(CONTROL_META, json.dumps({"version": 2, "files": watched, "features": features, "includes": includes, "remote": dict(remote),
                                         "directory": dict(server).get("directory", str(UNBOUND.parent))}).encode(), 0o600)
         return CONTROL_CACHE
 
@@ -206,7 +207,7 @@ def checked(*args):
     return result.stdout.strip()
 
 
-def apply_config(unit, path, old, data, reload=True, after=None):
+def apply_config(unit, path, old, data, reload=True, after=None, before_reload=None):
     if not data.strip() or len(data) > 1048576 or b"\x00" in data:
         raise ValueError("Isi file kosong atau terlalu besar.")
     stat = path.stat()
@@ -234,15 +235,20 @@ def apply_config(unit, path, old, data, reload=True, after=None):
         Path(candidate).unlink(missing_ok=True)
     if not reload:
         return
+    reload_attempted = False
     try:
+        if before_reload:
+            before_reload()
         # Agent units without ExecReload require restart for full config changes.
+        reload_attempted = True
         command("systemctl", "reload" if unit == "unbound" else "reload-or-restart", unit)
         command("systemctl", "is-active", "--quiet", unit)
         if after:
             after()
     except (ValueError, OSError, subprocess.SubprocessError):
         atomic(path, old, *attrs)
-        command("systemctl", "reload-or-restart", unit)
+        if reload_attempted:
+            command("systemctl", "reload-or-restart", unit)
         raise
 
 
@@ -309,6 +315,15 @@ def control_certificates():
     print("Sertifikat kontrol dibuat di /etc/unbound. Atur bagian remote-control untuk menggunakannya.")
 
 
+def live_option(cache, name):
+    result = subprocess.run(["/usr/sbin/unbound-control", "-c", cache, "get_option", name],
+                            capture_output=True, text=True, check=True, timeout=1)
+    value = result.stdout.strip()
+    if value.startswith("error"):
+        raise ValueError(value)
+    return value
+
+
 def resolver_state():
     state = {"service": active("unbound"), "configured": False, "live": False}
     if not UNBOUND.is_file():
@@ -321,16 +336,8 @@ def resolver_state():
     modules = features.get("module-config", "validator iterator")
     if state["service"] == "active":
         try:
-            def option(name):
-                result = subprocess.run(["/usr/sbin/unbound-control", "-c", cache, "get_option", name],
-                                        capture_output=True, text=True, check=True, timeout=1)
-                value = result.stdout.strip()
-                if value.startswith("error"):
-                    raise ValueError(value)
-                return value
-
-            live_modules = option("module-config")
-            live_hints = option("root-hints")
+            live_modules = live_option(cache, "module-config")
+            live_hints = live_option(cache, "root-hints")
             modules, hints = live_modules, live_hints
             state["live"] = True
         except (OSError, ValueError, subprocess.SubprocessError):
@@ -442,7 +449,8 @@ def edit_server(body, settings=None, include=None, migrate_wrapper=False):
                 matches.append((index, part))
         if matches:
             index, part = next(((i, d) for i, d in matches if not d["comment"]), matches[0])
-            lines[index] = f'{part["indent"] or indent}{key}: {value}{newline}'
+            comment = re.search(r"[ \t]+#.*$", part["value"]) if key in LOG_OPTIONS else None
+            lines[index] = f'{part["indent"] or indent}{key}: {value}{comment[0] if comment else ""}{newline}'
             for duplicate, item in reversed(matches):
                 if duplicate != index and not item["comment"]:
                     del lines[duplicate]
@@ -453,6 +461,23 @@ def edit_server(body, settings=None, include=None, migrate_wrapper=False):
                  if re.match(r"^\s*(?:#\s*)?(?:root-hints|auto-trust-anchor-file):", lines[i])]
         if key in ("root-hints", "auto-trust-anchor-file") and (peers or marker is not None):
             index = peers[-1] if peers else marker
+        elif key in LOG_OPTIONS:
+            logging = next((i + 1 for i in range(start, end) if re.match(r"^\s*(?:#\s*)+LOGGING\b", lines[i], re.I)), None)
+            log_peers = [i + 1 for i in range(start, end) if re.match(r"^\s*(?:#\s*)?log-(?:queries|replies):", lines[i])]
+            if logging is not None:
+                index = logging
+                while index < end and re.match(r"^\s*(?:#\s*)?(?:log-[a-z-]+|use-syslog|logfile):", lines[index]):
+                    index += 1
+            elif log_peers:
+                index = log_peers[-1]
+            else:
+                index = end
+                while index > start and not lines[index - 1].strip():
+                    index -= 1
+                if index and not lines[index - 1].endswith(("\n", "\r")):
+                    lines[index - 1] += newline
+                lines.insert(index, f"{indent}# LOGGING{newline}")
+                index += 1
         else:
             index = end
             while index > start and not lines[index - 1].strip():
@@ -634,6 +659,39 @@ def toggle_filter(index, enabled):
     print("Konfigurasi filter, jadwal, dan database sudah diperbarui.")
 
 
+def logging_state():
+    cache = control_config()
+    features = json.loads(CONTROL_META.read_text())["features"]
+    result = {option: features.get(option) == "yes" for option in LOG_OPTIONS}
+    running = active("unbound") == "active"
+    if running:
+        for option in LOG_OPTIONS:
+            try:
+                value = live_option(cache, option)
+                if value in ("yes", "no"):
+                    result[option] = value == "yes"
+            except (OSError, ValueError, subprocess.SubprocessError):
+                pass
+    return {"running": running, **result}
+
+
+def set_logging(option, value):
+    if active("unbound") != "active":
+        raise ValueError("Aktifkan Unbound sebelum mengubah logging.")
+    path = UNBOUND.resolve(strict=True)
+    old = path.read_bytes()
+    body = edit_server(old.decode(), {option: value})
+
+    def verify_effective_config():
+        control_config()
+        features = json.loads(CONTROL_META.read_text())["features"]
+        if features.get(option) != value:
+            raise ValueError(f"Opsi {option} ditimpa oleh konfigurasi lain. Periksa urutan include atau blok server.")
+
+    apply_config("unbound", path, old, body.encode(), after=record_config, before_reload=verify_effective_config)
+    print(json.dumps({"option": option, "enabled": value == "yes"}))
+
+
 def live_unbound_log():
     # A dedicated reader keeps the log feed from consuming all available web workers.
     with open("/run/unbound-web-live-log.lock", "a") as handle:
@@ -695,6 +753,8 @@ def main(args):
                 print("unbound_version=" + match[1])
     elif op == "unbound-live-log" and not params:
         live_unbound_log()
+    elif op == "unbound-logging-state" and not params:
+        print(json.dumps(logging_state()))
     elif op in ("stats", "stats-live") and not params:
         subprocess.run(["unbound-control", "-c", str(control_config()), "stats_noreset"],
                        check=True, timeout=0.6 if op == "stats-live" else 8)
@@ -719,6 +779,8 @@ def main(args):
         with lock():
             if op == "config-save" and len(params) == 2:
                 editor(op, *params)
+            elif op == "unbound-logging-set" and len(params) == 2 and params[0] in LOG_OPTIONS and params[1] in ("yes", "no"):
+                set_logging(*params)
             elif op == "unbound-check" and not params:
                 print(checked("/usr/sbin/unbound-checkconf", UNBOUND))
             elif op == "unbound-stop" and not params:

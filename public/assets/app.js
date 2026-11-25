@@ -22,6 +22,15 @@
         if (output) {
           output.textContent = result.message || (result.ok ? 'Berhasil.' : 'Permintaan gagal.');
         }
+        if (result.ok && form.dataset.logToggle && result.logging?.option === form.elements.option.value) {
+          const enabled = result.logging.enabled === true;
+          const label = (enabled ? 'Nonaktifkan ' : 'Aktifkan ') + form.dataset.logToggle;
+          const status = form.querySelector('[data-log-state]');
+          form.elements.value.value = enabled ? 'no' : 'yes';
+          status.textContent = enabled ? 'Aktif' : 'Nonaktif';
+          status.dataset.active = String(enabled);
+          button.dataset.oldText = label;
+        }
         if (result.ok && form.dataset.reload !== 'false') setTimeout(() => location.reload(), 700);
       } catch (error) {
         if (output) output.textContent = 'Permintaan gagal: ' + error.message;

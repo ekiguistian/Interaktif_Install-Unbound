@@ -15,6 +15,9 @@ foreach ($state['filters'] as $key => $value) {
 foreach (['root-hints', 'module-config', 'val-permissive-mode'] as $option) {
     $save->execute(['unbound_' . $option, $state['resolver'][$option] ?? '']);
 }
+foreach (['log-queries', 'log-replies'] as $option) {
+    $save->execute(['unbound_' . $option, $state['resolver'][$option] ?? 'no']);
+}
 $pdo->commit();
 
 // System ini di buat dan hasil ide oleh Eki Guistian, Anda boleh memakai dan memdifikasi dengan syarat tetap membuka code ke public dan mencatumkan sumber dari Eki guistian. sesuai aturan opensource
