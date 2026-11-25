@@ -162,7 +162,7 @@ Klik gambar untuk membuka ukuran penuh.
 
 ## Dukungan
 
-Kalau panel ini bermanfaat, kamu bisa mendukung pengembangannya lewat [PayPal](https://paypal.me/ekiguistian22).
+Kalau panel ini bermanfaat, kamu bisa dukung saya dengan segelas kopi lewat [PayPal](https://paypal.me/ekiguistian22).
 
 ## Distribusi dan pengembangan
 
