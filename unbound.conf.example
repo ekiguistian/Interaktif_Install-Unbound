@@ -1,11 +1,11 @@
 server:
     # GENERAL
     verbosity: 0
-    num-threads: 4
+    num-threads: 4 # -->> Isi sesuai dengan core cpu anda
 
-    # NETWORK - Isi sesuai ip interface Server
+    # NETWORK 
     interface: 127.0.0.1
-    interface: 10.10.10.10 
+    interface: 10.10.10.10 # -->> Isi sesuai ip server anda
     port: 53
 
     # PROTOCOL
@@ -17,7 +17,7 @@ server:
 
     # ACCESS CONTROL
     access-control: 127.0.0.0/8 allow
-    access-control: 0.0.0.0/0 allow
+    access-control: 0.0.0.0/0 allow # -->> Isi sesuai ip local, atau biarkan default untuk semua ip
 
     # THREAD & SOCKET
     so-reuseport: yes
@@ -25,15 +25,15 @@ server:
     so-sndbuf: 4m
 
     # MEMORY CACHE
-    msg-cache-size: 512m
-    rrset-cache-size: 1536m
-    key-cache-size: 128m
+    msg-cache-size: 512m # -->> Isi 25% Memory Server
+    rrset-cache-size: 1536m #-->> Isi 70% Memory Server
+    key-cache-size: 128m #-->> Isi 5% Memory Server
 
     # CACHE SLABS
-    msg-cache-slabs: 4
-    rrset-cache-slabs: 4
-    infra-cache-slabs: 4
-    key-cache-slabs: 4
+    msg-cache-slabs: 4 # -->> Isi sesuai dengan core cpu anda
+    rrset-cache-slabs: 4 # -->> Isi sesuai dengan core cpu anda
+    infra-cache-slabs: 4 # -->> Isi sesuai dengan core cpu anda
+    key-cache-slabs: 4 # -->> Isi sesuai dengan core cpu anda
 
     # CACHE TTL
     cache-min-ttl: 60
@@ -72,8 +72,8 @@ server:
     local-data: "10.10.10.10.in-addr.arpa. IN PTR ns1.nexan.id."
 
     # ROOT HINTS & TRUST ANCHOR
-    # root-hints: "/var/lib/unbound/root.hints"
-    # auto-trust-anchor-file: "/var/lib/unbound/root.key"
+    root-hints: "/etc/unbound/unbound-web-root.hints"
+    auto-trust-anchor-file: "/var/lib/unbound/root.key"
 
     # LOGGING
     use-syslog: yes
@@ -81,11 +81,8 @@ server:
     log-replies: yes
     log-tag-queryreply: yes
 
-    # BLOCKLIST
-     # include: "/etc/unbound/blocklist/blocklist.conf"
-
-
 # FORWARD DNS
+    
 forward-zone:
     name: "."
     forward-first: yes
@@ -102,16 +99,8 @@ forward-zone:
     forward-addr: 9.9.9.9
     forward-addr: 149.112.112.112
 
-
 # REMOTE CONTROL
 remote-control:
     control-enable: yes
     control-interface: 127.0.0.1
     control-use-cert: yes
-    # Certifiace DNSSEC - Pastikan sudah di buat
-    #server-key-file: "/etc/unbound/unbound_server.key"
-    #server-cert-file: "/etc/unbound/unbound_server.pem"
-    #control-key-file: "/etc/unbound/unbound_control.key"
-    #control-cert-file: "/etc/unbound/unbound_control.pem"
-
-# System ini di buat dan hasil ide oleh Eki Guistian, Anda boleh memakai dan memdifikasi dengan syarat tetap membuka code ke public dan mencatumkan sumber dari Eki guistian. sesuai aturan opensource
