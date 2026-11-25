@@ -32,6 +32,10 @@ Buka URL HTTPS dan login dengan akun yang ditampilkan installer. Akses panel mem
 
 ## Update dari main
 
+Setelah memasang versi ini, buka **Pembaruan → Check for update**, cek commit yang tampil, lalu pilih **Pasang pembaruan**. Panel mengambil checkout `main` dari repo GitHub proyek ke `/opt/www/unbound-web/.updates/` dan menjalankan `install.sh` melalui systemd. Status tetap tersedia setelah PHP-FPM dimulai ulang. Untuk melihat kegagalan, jalankan `sudo journalctl -u unbound-web-update -n 50`.
+
+Untuk memasang versi ini pertama kali atau memperbarui lewat terminal:
+
 ```bash
 cd ~/Unbound_DNS_Web-Manager &&
 git switch main &&
@@ -43,7 +47,7 @@ sudo bash ./install.sh
 
 | Menu | Fungsi |
 |---|---|
-| **Monitor** | QPS, cache, latensi, CPU, RAM, disk, RX/TX, dan informasi Linux setiap detik. Riwayat satu jam dengan detail per detik untuk dua menit terakhir. |
+| **Monitor** | QPS, cache, latensi, CPU, RAM, disk, dan RX/TX. Dashboard diperbarui per detik dengan riwayat 10 menit. |
 | **Unbound** | Cek, simpan, reload, start/stop, root hints, DNSSEC, dan sertifikat TLS remote-control. Perubahan konfigurasi yang berhasil disimpan ke file dan database. |
 | **Cron / Uji DNS** | Status monitoring, jadwal filter, dan uji resolver dengan dnsperf. |
 | **Zabbix Agent** | Edit konfigurasi dan muat ulang agent. Jika belum terpasang, menu menampilkan [perintah Agent 2 7.0 LTS](https://www.zabbix.com/download?zabbix=7.0&os_distribution=ubuntu&os_version=22.04&components=agent_2) untuk Ubuntu 22.04. |
@@ -54,15 +58,14 @@ Tema **Sistem** mengikuti OS. Pilih **Terang** atau **Gelap** untuk menyimpan pi
 ## Filter DNS
 
 1. Tambahkan URL HTTPS publik di menu **Blocklist & Whitelist**. Isi file dapat berupa daftar domain, hosts, URL, Adblock, CSV, atau JSON. Tambahkan domain pengecualian secara manual atau isi URL whitelist.
-2. Untuk migrasi dari penghubung otomatis versi lama, matikan kedua filter terlebih dahulu. Jika `unbound.conf` meng-include `90-unbound-web-blocklist.conf` langsung, hapus include lama sebelum mematikan filter.
-3. Tambahkan sendiri baris yang dibutuhkan di dalam `server:` pada `/etc/unbound/unbound.conf`:
+2. Pilih **Masukkan Blocklist ke konfigurasi** atau **Masukkan Whitelist ke konfigurasi**. Tombol memasang include di dalam `server:` pada `/etc/unbound/unbound.conf`:
 
 ```conf
     include: "/etc/unbound/blocklist/blocklist.conf"
     include: "/etc/unbound/blocklist/whitelist.conf"
 ```
 
-4. Simpan konfigurasi, aktifkan filter, lalu pilih **Terapkan & perbarui cron**. Sinkronisasi berjalan pukul 03.15 waktu server. Gunakan **Update & Apply Now** untuk sinkronisasi langsung.
+3. Setelah include aktif, tombol berubah untuk menghapus include dan menonaktifkan filter terkait. Konfigurasi dan pengaturan dicatat ke database. Sinkronisasi berjalan pukul 03.15 waktu server. Gunakan **Update & Apply Now** untuk sinkronisasi langsung.
 
 Hasil konversi ada di `/var/lib/unbound-web-filters/`. Log ada di `/var/log/unbound-web-filters.log`. Untuk daftar jutaan domain, sediakan RAM tambahan saat validasi dan reload.
 

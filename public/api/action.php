@@ -15,6 +15,24 @@ $action = (string)($payload['action'] ?? '');
 try {
     $pdo = db();
     switch ($action) {
+        case 'update-check':
+        case 'update-run':
+        case 'update-status':
+            session_write_close();
+            if ($action === 'update-run') {
+                $commit = $payload['commit'] ?? '';
+                if (!is_string($commit) || !preg_match('/^[a-f0-9]{40}$/D', $commit)) fail_validation('Commit pembaruan tidak valid.');
+                $args = ['update-queue', $commit];
+            } else {
+                $args = [$action];
+            }
+            $result = manage($args, null, 35);
+            $state = $result['code'] === 0 ? json_decode($result['output'], true) : null;
+            if (!is_array($state)) {
+                json_response(['ok'=>false, 'message'=>trim($result['output']) ?: 'Status pembaruan belum tersedia.'], 422);
+            }
+            json_response(['ok'=>true, 'state'=>$state]);
+
         case 'config-save':
             $service = $payload['service'] ?? '';
             $content = $payload['content'] ?? null;
@@ -26,16 +44,7 @@ try {
             }
             session_write_close();
             set_time_limit(0);
-            if ($service === 'unbound') {
-                $pdo->beginTransaction();
-                $save = $pdo->prepare('INSERT INTO unbound_config (id,content) VALUES (1,?) ON DUPLICATE KEY UPDATE content=VALUES(content)');
-                $save->execute([$content]);
-            }
             $result = manage(['config-save', $service, $revision], $content, 600);
-            if ($service === 'unbound') {
-                if ($result['code'] === 0) $pdo->commit();
-                else $pdo->rollBack();
-            }
             json_response(['ok' => $result['code'] === 0, 'message' => trim($result['output'])], $result['code'] === 0 ? 200 : 422);
 
         case 'unbound-restart':
@@ -54,22 +63,19 @@ try {
         case 'firewall-reload':
             $timeout = in_array($action, ['stats','firewall-reload'], true) ? 45 : 600;
             if ($timeout === 600) { session_write_close(); set_time_limit(0); }
-            if (in_array($action, ['root-hints-enable','root-hints-disable','dnssec-enable','dnssec-disable'], true)) {
-                $pdo->beginTransaction();
-                $pdo->exec("INSERT IGNORE INTO unbound_config (id,content) VALUES (1,'')");
-                $pdo->query('SELECT id FROM unbound_config WHERE id=1 FOR UPDATE')->fetch();
-            }
             $result = manage([$action], null, $timeout);
-            if ($pdo->inTransaction()) {
-                if ($result['code'] === 0) {
-                    $config = json_decode($result['output'], true);
-                    if (!isset($config['content'])) throw new RuntimeException('Gagal membaca konfigurasi yang diterapkan.');
-                    $pdo->prepare('UPDATE unbound_config SET content=? WHERE id=1')->execute([$config['content']]);
-                    $pdo->commit();
-                    $result['output'] = 'Konfigurasi tersimpan dan Unbound sudah dimuat ulang.';
-                } else $pdo->rollBack();
-            }
             json_response(['ok' => $result['code'] === 0, 'message' => trim($result['output']) ?: 'Selesai.'], $result['code'] === 0 ? 200 : 422);
+
+        case 'filter-toggle':
+            $filter = $payload['filter'] ?? '';
+            $enabled = $payload['enabled'] ?? '';
+            if (!in_array($filter, ['block','white'], true) || !in_array($enabled, ['0','1'], true)) {
+                fail_validation('Pilihan filter tidak valid.');
+            }
+            session_write_close();
+            set_time_limit(0);
+            $result = manage(['filter-toggle', $filter, $enabled], null, 1200);
+            json_response(['ok'=>$result['code'] === 0, 'message'=>trim($result['output'])], $result['code'] === 0 ? 200 : 422);
 
         case 'filters-save':
             session_write_close();

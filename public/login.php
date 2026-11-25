@@ -52,7 +52,7 @@ page_start('Login admin', false, 'login');
   <section class="panel login-card">
     <div class="login-icon"><i class="fa-solid fa-lock" aria-hidden="true"></i></div>
     <h1>Masuk ke panel Unbound</h1>
-    <p class="mt-2 text-sm leading-6 text-slate-400">Gunakan akun admin untuk membuka monitor dan kontrol server.</p>
+    <p class="mt-2 text-sm leading-6 text-slate-400">Silahkan login untuk memantau DNS Server dan melakukan configurasi</p>
     <?php if ($message !== ''): ?><div class="mt-5 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-200"><?= e($message) ?></div><?php endif; ?>
     <form method="post" class="mt-6 space-y-4">
       <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>"><input type="hidden" name="next" value="<?= e($next) ?>">
@@ -60,7 +60,6 @@ page_start('Login admin', false, 'login');
       <label class="block"><span class="mb-2 block text-sm">Password</span><input class="form-input" type="password" name="password" autocomplete="current-password" required></label>
       <button class="btn-primary w-full" type="submit"><i class="fa-solid fa-arrow-right-to-bracket" aria-hidden="true"></i>Masuk</button>
     </form>
-    <p class="mt-5 text-xs leading-5 text-slate-500">Setelah delapan percobaan gagal, coba lagi dalam 15 menit.</p>
   </section>
 </div>
 <?php page_end(); ?>

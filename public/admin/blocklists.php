@@ -13,11 +13,7 @@ page_start('Blocklist & whitelist',true);
 ?>
 <section class="panel mb-5 p-5 sm:p-6">
   <h2 class="font-semibold">Autoupdate filter DNS</h2>
-  <p class="mt-2 text-sm text-slate-400">Sebelum mengaktifkan filter, tambahkan sendiri baris include untuk filter yang dipakai di dalam bagian <code>server:</code> pada <code>/etc/unbound/unbound.conf</code>.</p>
-  <pre class="mt-2 text-sm">    include: "/etc/unbound/blocklist/blocklist.conf"
-    include: "/etc/unbound/blocklist/whitelist.conf"</pre>
-  <p class="mt-2 text-sm text-slate-400">Migrasi dari versi lama: matikan kedua filter sebelum menambahkan include baru. Jika konfigurasi meng-include file lama <code>90-unbound-web-blocklist.conf</code> secara langsung, hapus baris lama tersebut terlebih dahulu.</p>
-  <p class="mt-1 text-sm leading-6 text-slate-400">Sumber digabung, domain duplikat dibuang, lalu whitelist URL dan manual diterapkan. Domain yang diblokir diarahkan ke IPv4 di bawah.</p>
+  <p class="mt-2 text-sm text-slate-400">Gunakan tombol masing-masing filter untuk mengatur include di bagian <code>server:</code> pada <code>/etc/unbound/unbound.conf</code>.</p>
   <form class="mt-5 filter-options" data-api="filter-options-save">
     <label><span class="mb-2 block text-sm">URL whitelist otomatis</span><input class="form-input" name="whitelist_url" type="url" maxlength="2048" value="<?=e($options['whitelist_url'])?>" placeholder="https://yourdomain.com/whitelist.txt"><span class="mt-1 block text-xs text-slate-500">Kosongkan untuk memakai whitelist manual saja.</span></label>
     <label><span class="mb-2 block text-sm">IP redirect</span><input class="form-input" name="redirect_ip" value="<?=e($options['redirect_ip'])?>" required></label>
@@ -43,7 +39,7 @@ page_start('Blocklist & whitelist',true);
   </section>
 
   <section class="panel p-5 sm:p-6">
-    <h2 class="font-semibold">Whitelist manual</h2><p class="mt-1 text-sm leading-6 text-slate-400">Tetap tersimpan saat whitelist URL diperbarui. Keduanya digabung untuk mengecualikan domain beserta subdomainnya dari blocklist.</p>
+    <h2 class="font-semibold">Whitelist manual</h2><p class="mt-1 text-sm leading-6 text-slate-400">Pengecualian domain dan subdomain.</p>
     <form class="mt-5 grid gap-3 sm:grid-cols-2" data-api="whitelist-add"><input class="form-input" name="domain" placeholder="yourdomain.com" required><input class="form-input" name="note" maxlength="255" placeholder="Catatan (opsional)"><button class="btn-primary sm:w-fit" type="submit"><i class="fa-solid fa-plus"></i>Tambah domain</button><p data-result class="text-sm text-cyan-200 sm:col-span-2"></p></form>
     <div class="mt-5 space-y-2">
       <?php foreach($whitelist as $item): ?><div class="rounded-xl border border-slate-800 bg-slate-900/60 p-3"><form class="flex flex-wrap items-end gap-2" data-api="whitelist-update"><input type="hidden" name="id" value="<?=e($item['id'])?>"><label class="min-w-44 flex-1"><span class="mb-1 block text-xs text-slate-500">Domain</span><input class="form-input" name="domain" value="<?=e($item['domain'])?>" required></label><label class="min-w-36 flex-1"><span class="mb-1 block text-xs text-slate-500">Catatan</span><input class="form-input" name="note" value="<?=e($item['note'])?>"></label><button class="btn-secondary" type="submit"><i class="fa-solid fa-floppy-disk"></i>Simpan</button></form><form class="mt-2" data-api="whitelist-delete"><input type="hidden" name="id" value="<?=e($item['id'])?>"><button class="btn-danger" type="submit"><i class="fa-solid fa-trash"></i>Hapus</button><span data-result class="ml-2 text-xs text-cyan-200"></span></form></div><?php endforeach; ?>
@@ -52,16 +48,21 @@ page_start('Blocklist & whitelist',true);
   </section>
 </div>
 <section class="panel mt-5 p-5 sm:p-6">
-  <div class="grid gap-5 lg:grid-cols-[1fr_auto] lg:items-center"><div><h2 class="font-semibold">Sinkronisasi & jadwal otomatis</h2><p class="mt-1 text-sm leading-6 text-slate-400">Update otomatis pukul 03.15 waktu server selama filter aktif. Hasil divalidasi sebelum Unbound di-reload; jika gagal, filter sebelumnya tetap digunakan.</p></div>
+  <div class="grid gap-5 lg:grid-cols-[1fr_auto] lg:items-center"><div><h2 class="font-semibold">Sinkronisasi & jadwal otomatis</h2><p class="mt-1 text-sm leading-6 text-slate-400">Update otomatis pukul 03.15 waktu server.</p></div>
     <form data-stream="blocklist-sync" data-output="#blocklist-output"><button class="btn-primary" type="submit"><i class="fa-solid fa-cloud-arrow-down"></i>Update & Apply Now</button></form>
   </div>
   <pre id="blocklist-output" class="mt-4 max-h-72 overflow-auto rounded-xl border border-slate-700 bg-black/50 p-4 font-mono text-xs leading-6 text-emerald-200">Siap menjalankan sinkronisasi.</pre>
   <?php if ($flags === null) { notice($state['output'], 'error'); } else { ?>
-  <form class="mt-5 flex flex-wrap items-center gap-4" data-api="filters-save">
-    <label><input type="checkbox" name="block" <?= $flags['block'] ? 'checked' : '' ?>> Aktifkan blocklist</label>
-    <label><input type="checkbox" name="white" <?= $flags['white'] ? 'checked' : '' ?>> Aktifkan whitelist</label>
-    <button class="btn-secondary" type="submit">Terapkan &amp; perbarui cron</button><p data-result role="status"></p>
-  </form><?php } ?>
+  <div class="mt-5 flex flex-wrap gap-4">
+    <?php foreach (['block' => 'Blocklist', 'white' => 'Whitelist'] as $key => $label): ?>
+    <?php $included = $flags[$key . '_included'] ?? false; ?>
+    <form data-api="filter-toggle" data-output="#filter-change-result">
+      <input type="hidden" name="filter" value="<?=e($key)?>">
+      <input type="hidden" name="enabled" value="<?=$included ? '0' : '1'?>">
+      <button class="btn-secondary" type="submit"><?=e($included ? "Nonaktifkan $label dan hapus include" : "Masukkan $label ke konfigurasi")?></button>
+    </form>
+    <?php endforeach; ?>
+  </div><p id="filter-change-result" class="mt-3" role="status"></p><?php } ?>
 </section>
 <?php page_end(); ?>
 

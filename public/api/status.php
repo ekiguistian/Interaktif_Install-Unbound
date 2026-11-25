@@ -6,12 +6,11 @@ header('Cache-Control: no-store');
 session_write_close();
 
 try {
-    // Recent points retain one-second detail; older points cover the full hour
-    // at minute resolution without sending thousands of rows every second.
+    // Keep one-second detail for the latest two minutes and 10-second buckets before that.
     $rows = db()->query('SELECT m.*, UNIX_TIMESTAMP(m.recorded_at) AS epoch FROM metrics m
-        INNER JOIN (SELECT MAX(id) AS id FROM metrics WHERE recorded_at >= NOW() - INTERVAL 1 HOUR
+        INNER JOIN (SELECT MAX(id) AS id FROM metrics WHERE recorded_at >= NOW() - INTERVAL 10 MINUTE
             GROUP BY CASE WHEN recorded_at >= NOW() - INTERVAL 2 MINUTE THEN UNIX_TIMESTAMP(recorded_at)
-                ELSE FLOOR(UNIX_TIMESTAMP(recorded_at)/60)*60 END
+                ELSE FLOOR(UNIX_TIMESTAMP(recorded_at)/10)*10 END
         ) points ON points.id=m.id ORDER BY m.id DESC LIMIT 181')->fetchAll();
     $history = [];
     $previous = null;

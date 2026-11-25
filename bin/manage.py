@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -23,6 +24,8 @@ CONTROL_CACHE = Path("/var/lib/unbound-web-filters/control-client.conf")
 CONTROL_META = CONTROL_CACHE.with_suffix(".json")
 ROOT_HINTS = Path("/etc/unbound/unbound-web-root.hints")
 ROOT_KEY = Path("/var/lib/unbound/root.key")
+FILTER_PATHS = ("/etc/unbound/blocklist/blocklist.conf", "/etc/unbound/blocklist/whitelist.conf")
+LEGACY_FILTER = Path("/etc/unbound/unbound.conf.d/90-unbound-web-blocklist.conf")
 CONTROL_FILES = ("unbound_server.key", "unbound_server.pem", "unbound_control.key", "unbound_control.pem")
 AGENTS = {
     "zabbix-agent2": Path("/etc/zabbix/zabbix_agent2.conf"),
@@ -74,7 +77,11 @@ def atomic(path, content, mode=0o644, owner=None):
     fd, name = tempfile.mkstemp(dir=path.parent, prefix=".unbound-web-")
     try:
         with os.fdopen(fd, "wb") as dest:
-            dest.write(content)
+            if isinstance(content, Path):
+                with content.open("rb") as source:
+                    shutil.copyfileobj(source, dest)
+            else:
+                dest.write(content)
             if owner:
                 os.fchown(dest.fileno(), *owner)
             os.fchmod(dest.fileno(), mode)
@@ -95,7 +102,7 @@ def control_config():
         fcntl.flock(handle, fcntl.LOCK_EX)
         try:
             metadata = json.loads(CONTROL_META.read_text())
-            if (CONTROL_CACHE.is_file() and metadata.get("files") and "features" in metadata
+            if (CONTROL_CACHE.is_file() and metadata.get("files") and "includes" in metadata
                     and all(stamp(path) == value for path, value in metadata["files"].items())):
                 return CONTROL_CACHE
         except (OSError, ValueError, TypeError, KeyError):
@@ -104,6 +111,7 @@ def control_config():
         anchor_keys = {"auto-trust-anchor-file", "trust-anchor-file", "trust-anchor", "trusted-keys-file"}
         feature_keys = {"root-hints", "module-config", "val-permissive-mode"} | anchor_keys
         features = {"anchors": []}
+        includes = []
         managed = {Path("/etc/unbound/blocklist/blocklist.conf"),
                    Path("/etc/unbound/blocklist/whitelist.conf"),
                    Path("/etc/unbound/unbound.conf.d/90-unbound-web-blocklist.conf")}
@@ -146,6 +154,7 @@ def control_config():
                         if directory.is_dir():
                             watched[str(directory)] = stamp(directory)
                         for child in sorted(glob.glob(pattern)):
+                            includes.append((str(path), str(Path(child).resolve())))
                             result = read(Path(child), "" if key == "include-toplevel" else section, (*stack, path))
                             if key == "include":
                                 section = result
@@ -161,7 +170,7 @@ def control_config():
         body = "server:\n" + "".join(f"    {key}: {json.dumps(value, ensure_ascii=False)}\n" for key, value in server)
         body += "remote-control:\n" + "".join(f"    {key}: {json.dumps(value, ensure_ascii=False)}\n" for key, value in remote)
         atomic(CONTROL_CACHE, body.encode(), 0o600)
-        atomic(CONTROL_META, json.dumps({"files": watched, "features": features, "remote": dict(remote),
+        atomic(CONTROL_META, json.dumps({"files": watched, "features": features, "includes": includes, "remote": dict(remote),
                                         "directory": dict(server).get("directory", str(UNBOUND.parent))}).encode(), 0o600)
         return CONTROL_CACHE
 
@@ -184,7 +193,7 @@ def editor(operation, name, revision=None):
     if revision != digest:
         raise ValueError("File berubah sejak dibuka. Muat ulang sebelum menyimpan.")
     data = sys.stdin.buffer.read(1048577)
-    apply_config(unit, path, old, data)
+    apply_config(unit, path, old, data, after=record_editor_config if unit == "unbound" else None)
     print("File tersimpan dan layanan sudah dimuat ulang.")
 
 
@@ -195,7 +204,7 @@ def checked(*args):
     return result.stdout.strip()
 
 
-def apply_config(unit, path, old, data):
+def apply_config(unit, path, old, data, reload=True, after=None):
     if not data.strip() or len(data) > 1048576 or b"\x00" in data:
         raise ValueError("Isi file kosong atau terlalu besar.")
     stat = path.stat()
@@ -221,11 +230,15 @@ def apply_config(unit, path, old, data):
         os.replace(candidate, path)
     finally:
         Path(candidate).unlink(missing_ok=True)
+    if not reload:
+        return
     try:
         # Agent units without ExecReload require restart for full config changes.
         command("systemctl", "reload" if unit == "unbound" else "reload-or-restart", unit)
         command("systemctl", "is-active", "--quiet", unit)
-    except (OSError, subprocess.SubprocessError):
+        if after:
+            after()
+    except (ValueError, OSError, subprocess.SubprocessError):
         atomic(path, old, *attrs)
         command("systemctl", "reload-or-restart", unit)
         raise
@@ -355,43 +368,143 @@ def zabbix_state():
             "architecture": subprocess.check_output(["dpkg", "--print-architecture"], text=True).strip()}
 
 
+SECTION = re.compile(r"^\s*([a-z][a-z0-9-]*):\s*(?:#.*)?$", re.I)
+DIRECTIVE = re.compile(r"^(?P<indent>[ \t]*)(?P<comment>#\s*)?(?P<key>[a-z][a-z0-9-]*):[ \t]*(?P<value>.*)$", re.I)
+LEGACY = re.compile(r"(?ms)^# Unbound Web Manager (root-hints|dnssec) begin\r?\n(.*?)^# Unbound Web Manager \1 end[^\n]*\n?")
+
+
+def server_range(lines):
+    buckets = [(index, match[1]) for index, line in enumerate(lines)
+               if (match := SECTION.fullmatch(line.rstrip("\r\n")))]
+    for offset, (start, key) in enumerate(buckets):
+        if key == "server":
+            return start + 1, buckets[offset + 1][0] if offset + 1 < len(buckets) else len(lines)
+    return None, buckets[0][0] if buckets else len(lines)
+
+
+def directive_args(value):
+    try:
+        return shlex.split(value, comments=True)
+    except ValueError:
+        return []
+
+
+def include_target(line):
+    match = DIRECTIVE.match(line.rstrip("\r\n"))
+    if not match or match["comment"] or match["key"] not in ("include", "include-toplevel"):
+        return ""
+    values = directive_args(match["value"])
+    if len(values) != 1:
+        return ""
+    return str(Path("/etc/unbound") / values[0])
+
+
+def edit_server(body, settings=None, include=None, migrate_wrapper=False):
+    """Edit the existing server section and fold in old panel-generated blocks."""
+    options = {}
+    newline = "\r\n" if "\r\n" in body else "\n"
+
+    def migrate(match):
+        for line in match[2].splitlines():
+            option = DIRECTIVE.match(line)
+            if option and not option["comment"] and option["key"] in {
+                "root-hints", "module-config", "val-permissive-mode", "auto-trust-anchor-file"
+            }:
+                options[option["key"]] = option["value"]
+        return ""
+
+    body = LEGACY.sub(migrate, body)
+    options.update(settings or {})
+    lines = body.splitlines(keepends=True)
+    if migrate_wrapper:
+        lines = [line for line in lines if include_target(line) != str(LEGACY_FILTER)]
+    start, end = server_range(lines)
+    if start is None:
+        # Package installations can have only include-toplevel in the main file.
+        lines[end:end] = ["server:" + newline, newline]
+        start, end = end + 1, end + 2
+    indent = next((d["indent"] for line in lines[start:end]
+                   if (d := DIRECTIVE.match(line)) and d["indent"]), "    ")
+
+    for key, value in options.items():
+        start, end = server_range(lines)
+        matches = []
+        for index in range(start, end):
+            part = DIRECTIVE.match(lines[index])
+            if part and part["key"] == key:
+                if key == "auto-trust-anchor-file":
+                    # Preserve independent trust anchors for privately signed zones.
+                    args = directive_args(part["value"])
+                    if args and args[0] not in (str(ROOT_KEY), "/etc/unbound/unbound-web-root.key"):
+                        continue
+                matches.append((index, part))
+        if matches:
+            index, part = next(((i, d) for i, d in matches if not d["comment"]), matches[0])
+            lines[index] = f'{part["indent"] or indent}{key}: {value}{newline}'
+            for duplicate, item in reversed(matches):
+                if duplicate != index and not item["comment"]:
+                    del lines[duplicate]
+            continue
+        marker = next((i + 1 for i in range(start, end) if re.match(
+            r"^\s*#\s*ROOT HINTS.*TRUST ANCHOR", lines[i], re.I)), None)
+        peers = [i + 1 for i in range(start, end)
+                 if re.match(r"^\s*(?:#\s*)?(?:root-hints|auto-trust-anchor-file):", lines[i])]
+        if key in ("root-hints", "auto-trust-anchor-file") and (peers or marker is not None):
+            index = peers[-1] if peers else marker
+        else:
+            index = end
+            while index > start and not lines[index - 1].strip():
+                index -= 1
+        if index and not lines[index - 1].endswith(("\n", "\r")):
+            lines[index - 1] += newline
+        lines.insert(index, f"{indent}{key}: {value}{newline}")
+
+    if include is not None:
+        target, enabled = include
+        # Move an existing explicit include into server and remove duplicates.
+        lines = [line for line in lines if include_target(line) != target]
+        if enabled:
+            start, end = server_range(lines)
+            index = end
+            while index > start and not lines[index - 1].strip():
+                index -= 1
+            if not lines[index - 1].endswith(("\n", "\r")):
+                lines[index - 1] += newline
+            lines.insert(index, f'{indent}include: "{target}"{newline}')
+    return "".join(lines)
+
+
 def set_resolver_feature(op):
     path = UNBOUND.resolve(strict=True)
     old = path.read_bytes()
-    body = old.decode()
     feature, action = op.rsplit("-", 1)
-    marker = "# Unbound Web Manager " + feature
-    body = re.sub(r"(?ms)^" + re.escape(marker) + r" begin\n.*?^" + re.escape(marker) + r" end\n?", "", body)
     if feature == "root-hints":
-        directives = []
-        if action == "enable":
-            if not ROOT_HINTS.is_file() or ROOT_HINTS.is_symlink():
-                raise ValueError("Unduh root hints terlebih dahulu.")
-            directives = [f'root-hints: "{ROOT_HINTS}"']
-        else:
-            # An empty option falls back to Unbound's built-in root hints.
-            directives = ['root-hints: ""']
+        if action == "enable" and (not ROOT_HINTS.is_file() or ROOT_HINTS.is_symlink()):
+            raise ValueError("Unduh root hints terlebih dahulu.")
+        directives = {"root-hints": json.dumps(str(ROOT_HINTS) if action == "enable" else "")}
     else:
         modules = checked("/usr/sbin/unbound-checkconf", "-o", "module-config", UNBOUND).split()
         if action == "enable" and "validator" not in modules:
             modules.insert(modules.index("iterator") if "iterator" in modules else 0, "validator")
         if action == "disable":
             modules = [module for module in modules if module != "validator"]
-        directives = [f'module-config: "{" ".join(modules)}"']
+        directives = {"module-config": json.dumps(" ".join(modules))}
         if action == "enable":
-            directives.append('val-permissive-mode: no')
-            if not ROOT_KEY.is_file() or not ROOT_KEY.stat().st_size:
-                raise ValueError("Siapkan trust anchor terlebih dahulu.")
-            # Ubuntu normally includes this packaged root anchor already.
-            configs = [body] + [p.read_text() for p in UNBOUND.parent.glob("unbound.conf.d/*.conf")
-                                if p.name != "90-unbound-web-blocklist.conf"]
-            if not any(re.search(r'(?m)^\s*auto-trust-anchor-file:\s*"?' + re.escape(str(ROOT_KEY)) + r'(?:"|\s|$)', item) for item in configs):
-                directives.append(f'auto-trust-anchor-file: "{ROOT_KEY}"')
-    if directives:
-        body = body.rstrip() + "\n\n" + marker + " begin\nserver:\n"
-        body += "".join("    " + directive + "\n" for directive in directives) + marker + " end\n"
-    apply_config("unbound", path, old, body.encode())
-    print(json.dumps({"content": body}))
+            directives["val-permissive-mode"] = "no"
+            control_config()
+            metadata = json.loads(CONTROL_META.read_text())
+            included_anchor = any(
+                re.search(r'(?m)^\s*auto-trust-anchor-file:\s*"?'
+                          + re.escape(str(ROOT_KEY)) + r'(?:"|\s|$)', Path(file).read_text())
+                for file in metadata["files"] if file != str(path) and Path(file).is_file()
+            )
+            if not included_anchor:
+                if not ROOT_KEY.is_file() or not ROOT_KEY.stat().st_size:
+                    raise ValueError("Siapkan trust anchor terlebih dahulu.")
+                directives["auto-trust-anchor-file"] = json.dumps(str(ROOT_KEY))
+    body = edit_server(old.decode(), directives)
+    apply_config("unbound", path, old, body.encode(), after=record_config)
+    print("Konfigurasi tersimpan dan Unbound sudah dimuat ulang.")
 
 
 def flags():
@@ -405,6 +518,118 @@ def flags():
 
 def sync(bits):
     command(*host_command("/usr/bin/php8.4", str(APP / "bin/blocklist-sync.php"), *bits))
+
+
+def filter_state():
+    block, white = flags()
+    control_config()
+    metadata = json.loads(CONTROL_META.read_text())
+    paths = {target for _, target in metadata["includes"]}
+    return {"block": block == "1", "white": white == "1",
+            "block_included": FILTER_PATHS[0] in paths, "white_included": FILTER_PATHS[1] in paths}
+
+
+def record_config():
+    state = filter_state()
+    metadata = json.loads(CONTROL_META.read_text())
+    content = UNBOUND.read_bytes().decode()
+    payload = json.dumps({"content": content, "filters": state, "resolver": metadata["features"]}, ensure_ascii=False)
+    result = subprocess.run(["/usr/bin/php8.4", str(APP / "bin/record-config.php")],
+                            input=payload, capture_output=True, text=True, timeout=15)
+    if result.returncode != 0:
+        raise ValueError("Gagal menyimpan snapshot konfigurasi ke database.")
+
+
+def record_editor_config():
+    state = filter_state()
+    before = flags()
+    after = [bit if state[key] else "0" for bit, key in zip(before, ("block_included", "white_included"))]
+    if after == before:
+        record_config()
+        return
+    previous = FILTER_CRON.read_bytes()
+    try:
+        schedule(after)
+        record_config()
+    except (ValueError, OSError, subprocess.SubprocessError):
+        atomic(FILTER_CRON, previous)
+        raise
+
+
+def schedule(bits):
+    if "1" in bits:
+        body = f"# filters {' '.join(bits)}\n15 3 * * * root {HELPER} update-blocklists\n"
+        atomic(FILTER_CRON, body.encode())
+    else:
+        FILTER_CRON.unlink(missing_ok=True)
+
+
+@contextlib.contextmanager
+def filter_transaction():
+    paths = [UNBOUND.resolve(strict=True), FILTER_CRON, LEGACY_FILTER, *map(Path, FILTER_PATHS)]
+    with tempfile.TemporaryDirectory() as folder:
+        previous = []
+        for index, path in enumerate(paths):
+            if path.is_symlink():
+                raise ValueError(f"File filter tidak boleh berupa symlink: {path}")
+            stat = path.stat() if path.is_file() else None
+            backup = Path(folder, str(index))
+            if stat:
+                shutil.copyfile(path, backup)
+            previous.append((path, stat, backup))
+        try:
+            yield
+        except (ValueError, OSError, subprocess.SubprocessError):
+            for path, stat, backup in previous:
+                if stat:
+                    if not path.is_file() or not files_equal(path, backup):
+                        atomic(path, backup, stat.st_mode & 0o777, (stat.st_uid, stat.st_gid))
+                elif path.is_file():
+                    path.unlink()
+            if active("unbound") == "active":
+                command("systemctl", "reload", "unbound")
+            raise
+
+
+def files_equal(first, second):
+    if first.stat().st_size != second.stat().st_size:
+        return False
+    with first.open("rb") as left, second.open("rb") as right:
+        for chunk in iter(lambda: left.read(65536), b""):
+            if chunk != right.read(65536):
+                return False
+    return True
+
+
+def toggle_filter(index, enabled):
+    current = filter_state()
+    bits = flags()
+    bits[index] = "1" if enabled else "0"
+    target = FILTER_PATHS[index]
+    path = UNBOUND.resolve(strict=True)
+    old = path.read_bytes()
+    direct = any(include_target(line) == target for line in old.decode().splitlines())
+    if not enabled and current[("block_included", "white_included")[index]] and not direct:
+        raise ValueError("Include ini berasal dari file lain atau wildcard. Ubah include tersebut melalui konfigurasi asal.")
+    with filter_transaction():
+        legacy = LEGACY_FILTER.is_file()
+        if legacy:
+            if not LEGACY_FILTER.read_bytes().startswith(b"# Dikelola Unbound Web Manager."):
+                raise ValueError("File include lama bukan buatan panel. Periksa isinya sebelum migrasi.")
+            LEGACY_FILTER.unlink()
+        body = edit_server(old.decode(), include=(target, enabled and (direct or not current[
+            ("block_included", "white_included")[index]])), migrate_wrapper=legacy)
+        if legacy and bits[1 - index] == "1" and not current[("block_included", "white_included")[1 - index]]:
+            body = edit_server(body, include=(FILTER_PATHS[1 - index], True))
+        # A late validation also detects wildcard includes that cannot be removed here.
+        apply_config("unbound", path, old, body.encode(), reload=False)
+        state = filter_state()
+        if state[("block_included", "white_included")[index]] != enabled:
+            raise ValueError("Include dari file lain masih memuat filter ini.")
+        schedule(bits)
+        sync(bits)
+        record_config()
+    print("Konfigurasi filter, jadwal, dan database sudah diperbarui.")
 
 
 def main(args):
@@ -431,9 +656,12 @@ def main(args):
         print(json.dumps(resolver_state()))
     elif op == "zabbix-state" and not params:
         print(json.dumps(zabbix_state()))
+    elif op in ("update-status", "update-check") and not params:
+        command(*host_command("/usr/bin/python3", "-I", str(APP / "bin/update.py"), op.split("-", 1)[1]))
+    elif op == "update-queue" and len(params) == 1 and re.fullmatch(r"[0-9a-f]{40}", params[0]):
+        command(*host_command("/usr/bin/python3", "-I", str(APP / "bin/update.py"), "queue", params[0]))
     elif op == "filters-state" and not params:
-        block, white = flags()
-        print(json.dumps(dict(block=block == "1", white=white == "1")))
+        print(json.dumps(filter_state()))
     elif op == "cron-view" and not params:
         print("Monitoring: unbound-web-monitor.service / interval 1 detik / " + active("unbound-web-monitor"))
         for path in [WORKER_CRON, FILTER_CRON]:
@@ -464,27 +692,13 @@ def main(args):
                 if "1" not in bits:
                     raise ValueError("Aktifkan filter terlebih dahulu.")
                 sync(bits)
+            elif op == "filter-toggle" and len(params) == 2 and params[0] in ("block", "white") and params[1] in ("0", "1"):
+                toggle_filter(0 if params[0] == "block" else 1, params[1] == "1")
             elif op == "filters-save" and len(params) == 2 and set(params) <= {"0", "1"}:
-                old = flags()
-                if params == old == ["0", "0"] and not Path(
-                    "/etc/unbound/unbound.conf.d/90-unbound-web-blocklist.conf"
-                ).exists():
-                    print("Filter nonaktif.")
-                    return
-                previous_cron = FILTER_CRON.read_bytes() if FILTER_CRON.exists() else None
-                try:
-                    if "1" in params:
-                        body = f"# filters {' '.join(params)}\n15 3 * * * root {HELPER} update-blocklists\n"
-                        atomic(FILTER_CRON, body.encode())
-                    else:
-                        FILTER_CRON.unlink(missing_ok=True)
+                with filter_transaction():
+                    schedule(params)
                     sync(params)
-                except (OSError, subprocess.SubprocessError):
-                    if previous_cron is None:
-                        FILTER_CRON.unlink(missing_ok=True)
-                    else:
-                        atomic(FILTER_CRON, previous_cron)
-                    raise
+                    record_config()
                 print("Jadwal sinkronisasi diperbarui.")
             else:
                 raise ValueError("Operasi tidak dikenal.")

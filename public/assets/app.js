@@ -95,6 +95,45 @@
     select.addEventListener('change', toggle);
     toggle();
   }
+  const updatePanel = document.querySelector('[data-update-panel]');
+  if (updatePanel) {
+    const check = updatePanel.querySelector('[data-update-check]');
+    const install = updatePanel.querySelector('[data-update-run]');
+    const message = updatePanel.querySelector('[data-update-message]');
+    let busy = false;
+    let commit = '';
+    let timer;
+    async function requestUpdate(action) {
+      clearTimeout(timer);
+      check.disabled = install.disabled = true;
+      try {
+        const response = await fetch('/api/action', {
+          method:'POST', headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},
+          body:JSON.stringify({action,commit}), signal:AbortSignal.timeout(36000)
+        });
+        if (response.status === 401) { location.assign('/login?next=/settings/update'); return; }
+        const data = await response.json();
+        if (!data.ok) throw new Error(data.message || 'Gagal membaca status pembaruan.');
+        const state = data.state;
+        commit = state.commit || '';
+        busy = ['queued','cloning','installing'].includes(state.phase);
+        updatePanel.querySelector('[data-installed]').textContent = state.installed || 'Belum tercatat';
+        updatePanel.querySelector('[data-update-commit]').textContent = commit || '—';
+        message.textContent = state.message || 'Belum ada pengecekan.';
+        install.hidden = state.phase !== 'available';
+      } catch (error) {
+        message.textContent = busy ? 'Menunggu panel kembali setelah pemasangan…' : error.message;
+      } finally {
+        check.disabled = install.disabled = busy;
+        if (busy) timer = setTimeout(() => requestUpdate('update-status'), 3000);
+      }
+    }
+    check.addEventListener('click', () => requestUpdate('update-check'));
+    install.addEventListener('click', () => {
+      if (window.confirm('Pasang commit yang baru dicek dari GitHub main?')) requestUpdate('update-run');
+    });
+    requestUpdate('update-status');
+  }
   if (!document.querySelector('[data-dashboard]')) return;
   const byId = id => document.getElementById(id);
   const show = (id, value) => { byId(id).textContent = value; };
@@ -133,7 +172,8 @@
         callbacks:{title:items=>timeLabel(items[0].parsed.x),label:item=>item.dataset.label + ' · ' + formatter(item.parsed.y)}
       }},
       scales:{
-        x:{type:'linear',ticks:{color:colors.muted,maxTicksLimit:5,callback:timeLabel},grid:{color:colors['chart-grid']}},
+        x:{type:'linear',min:payload.now - 600,max:payload.now,
+          ticks:{color:colors.muted,maxTicksLimit:5,callback:timeLabel},grid:{color:colors['chart-grid']}},
         y:{beginAtZero:true,ticks:{color:colors.muted,maxTicksLimit:4,callback:formatter},grid:{color:colors['chart-grid']}}
       }
     } : null;
@@ -147,6 +187,8 @@
         chart.options = options;
         chart.themeRevision = themeRevision;
       }
+      chart.options.scales.x.min = payload.now - 600;
+      chart.options.scales.x.max = payload.now;
       chart.update('none');
     }
   }

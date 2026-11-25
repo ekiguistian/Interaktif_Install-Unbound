@@ -16,7 +16,7 @@ src=$(cd -- "$(dirname -- "$0")" && pwd -P)
 dest=/opt/www/unbound-web
 conf=/etc/unbound-web
 [[ $src != "$dest" ]] || die 'Jalankan installer dari checkout proyek.'
-for file in app/bootstrap.php app/functions.php app/filters.php app/domains.php bin/manage.py bin/monitor.py bin/worker.php bin/seed-domains.php bin/seed-filters.php database/schema.sql public/index.php src/dnsperf-domains.txt; do
+for file in app/bootstrap.php app/functions.php app/filters.php app/domains.php bin/manage.py bin/monitor.py bin/worker.php bin/seed-domains.php bin/seed-filters.php bin/record-config.php bin/update.py database/schema.sql public/index.php src/dnsperf-domains.txt; do
     [[ -f $src/$file ]] || die "Source proyek tidak lengkap. File $file tidak ditemukan. Clone repositori sebelum menjalankan installer."
 done
 exec 9>/run/unbound-web-install.lock
@@ -48,7 +48,7 @@ for package in "${php_packages[@]}" dnsperf; do
 done
 step 'Memasang MySQL, PHP 8.4, Nginx, dan dependensi panel'
 "${apt[@]}" install -y mysql-server mysql-client nginx "${php_packages[@]}" \
-    openssl sudo cron curl rsync python3 dnsperf iproute2
+    openssl sudo cron curl rsync python3 dnsperf iproute2 git
 php8.4 -r 'exit(PHP_VERSION_ID >= 80400 && extension_loaded("pdo_mysql") ? 0 : 1);' || die 'PHP 8.4 atau extension pdo_mysql belum siap.'
 
 host=${WEB_HOST:-}
@@ -249,6 +249,18 @@ UMask=0027
 WantedBy=multi-user.target
 UNIT
 install -m 0644 "$tmp/monitor-unit" /etc/systemd/system/unbound-web-monitor.service
+cat > "$tmp/update-unit" <<'UNIT'
+[Unit]
+Description=Update Unbound Web Manager from GitHub main
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I /opt/www/unbound-web/bin/update.py install
+TimeoutStartSec=33min
+UMask=0077
+UNIT
+install -m 0644 "$tmp/update-unit" /etc/systemd/system/unbound-web-update.service
 systemctl daemon-reload
 systemctl enable unbound-web-monitor
 systemctl restart unbound-web-monitor
@@ -310,6 +322,16 @@ curl --fail --silent --show-error --retry 5 --retry-connrefused --connect-timeou
 grep -q 'name="password"' "$tmp/login" || die 'Halaman login panel belum dapat diverifikasi.'
 printf '%s\n' "$host" > "$tmp/web-host"
 install -m 0640 -o root -g unbound-web "$tmp/web-host" "$conf/web-host"
-printf '\nURL       https://%s/\nUsername  %s\nPassword  %s\n' "$host" "${settings[4]}" "${settings[5]}"
+if [[ -d $src/.git ]] && revision=$(git -c "safe.directory=$src" -C "$src" rev-parse --verify HEAD) && git -c "safe.directory=$src" -C "$src" diff-index --quiet HEAD --; then
+    printf '%s\n' "$revision" > "$tmp/installed-commit"
+    install -m 0640 -o root -g unbound-web "$tmp/installed-commit" "$conf/installed-commit"
+elif [[ -f $conf/installed-commit ]]; then
+    unlink "$conf/installed-commit"
+fi
+if [[ ${UNBOUND_WEB_QUIET_CREDENTIALS:-0} = 1 ]]; then
+    printf '\nPanel siap di https://%s/\n' "$host"
+else
+    printf '\nURL       https://%s/\nUsername  %s\nPassword  %s\n' "$host" "${settings[4]}" "${settings[5]}"
+fi
 
 # System ini di buat dan hasil ide oleh Eki Guistian, Anda boleh memakai dan memdifikasi dengan syarat tetap membuka code ke public dan mencatumkan sumber dari Eki guistian. sesuai aturan opensource

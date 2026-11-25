@@ -25,7 +25,7 @@ function page_start(string $title, bool $admin = false, string $view = ''): void
   <link rel="stylesheet" href="/assets/app.css?v=$cssVersion">
 </head>
 <body class="min-h-screen antialiased $bodyClass">
-<div class="min-h-screen">
+<div class="site-frame">
 HTML;
     if ($admin) {
         echo '<nav class="floating-nav panel" aria-label="Navigasi admin">';
@@ -44,6 +44,7 @@ HTML;
             ['/settings/unbound', 'Unbound', 'fa-server', $unboundSection],
             ['/settings/zabbix', 'Zabbix Agent', 'fa-chart-line', $path === '/settings/zabbix'],
             ['/settings/firewall', 'Firewall', 'fa-fire', $path === '/settings/firewall'],
+            ['/settings/update', 'Pembaruan', 'fa-cloud-arrow-down', $path === '/settings/update'],
         ];
         foreach ($links as [$href, $label, $icon, $active]) {
             $classes = $active ? 'nav-link nav-active' : 'nav-link';
@@ -75,7 +76,8 @@ HTML;
 function page_end(): void
 {
     $jsVersion = (string)(@filemtime(__DIR__ . '/../public/assets/app.js') ?: 1);
-    echo '</main></div><script src="/assets/app.js?v=' . e($jsVersion) . '" defer></script></body></html>';
+    echo '</main><footer class="site-footer">Created With Love By Eki Guistian - IT Magang</footer></div>';
+    echo '<script src="/assets/app.js?v=' . e($jsVersion) . '" defer></script></body></html>';
 }
 
 function card(string $title, string $icon, string $body, string $href): void

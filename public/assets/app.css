@@ -15,6 +15,9 @@
   --shadow:0 12px 36px rgb(0 0 0 / .15);
 }
 body { background:var(--base); color:var(--ink); }
+.site-frame { display:flex; flex-direction:column; min-height:100svh; }
+.site-frame > main { flex:1; }
+.site-footer { padding:1rem 1.25rem; border-top:1px solid var(--line); text-align:center; color:var(--muted); font-size:.8rem; }
 .panel { border:1px solid var(--line); border-radius:1rem; background:var(--surface); box-shadow:var(--shadow); }
 .page-heading { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:1rem; margin-bottom:1.5rem; }
 .page-heading h1,.login-card h1 { font-size:clamp(1.5rem, 2.4vw, 2.1rem); font-weight:700; line-height:1.14; letter-spacing:-.035em; }
@@ -35,6 +38,7 @@ body { background:var(--base); color:var(--ink); }
 .btn-secondary:hover,.btn-danger:hover { background:var(--tint); }
 .btn-danger { color:var(--danger); }
 button:disabled { opacity:.55; cursor:wait; }
+[data-update-run][hidden] { display:none; }
 pre { white-space:pre-wrap; overflow-wrap:anywhere; }
 .kpi { min-height:135px; }
 .text-slate-400,.text-slate-300 { color:var(--muted); }
@@ -46,13 +50,13 @@ pre { white-space:pre-wrap; overflow-wrap:anywhere; }
 .bg-slate-900\/60,.bg-black\/50 { background:var(--field); }
 
 .login-page { background:radial-gradient(ellipse at 25% 10%, var(--tint), transparent 60%),var(--base); }
-.login-main { display:flex; flex-direction:column; min-height:100svh; max-width:80rem; }
+.login-main { display:flex; flex-direction:column; max-width:80rem; }
 .login-brand { display:flex; align-items:center; gap:.6rem; color:var(--accent); font-weight:700; }
 .login-content { display:grid; flex:1; place-items:center; padding:1rem 0 3rem; }
 .login-card { width:min(100%,28rem); padding:clamp(1.2rem,4vw,2rem); }
 .login-icon { display:grid; place-items:center; width:3rem; height:3rem; margin-bottom:1.15rem; border-radius:.85rem; background:var(--tint); color:var(--accent); }
 
-.monitor-page { max-width:none; }
+.monitor-page { max-width:86rem; padding-inline:clamp(1rem,4vw,3.25rem); }
 .host-strip,.chart-heading { display:flex; align-items:start; justify-content:space-between; gap:.7rem; flex-wrap:wrap; }
 .host-strip { padding:1.1rem 1.35rem; margin-bottom:1.35rem; border-left:4px solid var(--accent); }
 .host-strip span,.host-strip p,.detail-grid dt { display:block; color:var(--muted); font-size:.85rem; }
@@ -63,9 +67,9 @@ pre { white-space:pre-wrap; overflow-wrap:anywhere; }
 .telemetry { padding:clamp(.85rem, 1.5vw, 1.35rem); min-width:0; }
 .telemetry h3 { font-size:.95rem; color:var(--muted); }
 .telemetry > strong { display:block; margin:.35rem 0 .65rem; font-size:clamp(1.15rem, 1.8vw, 1.75rem); font-variant-numeric:tabular-nums; }
-.plot { position:relative; min-width:0; overflow:hidden; height:clamp(10rem,15vw,18rem); }
+.plot { position:relative; min-width:0; overflow:hidden; height:clamp(8rem,12vw,11.25rem); }
 .wide-chart { grid-column:1/-1; }
-.wide-chart .plot { height:clamp(12rem,18vw,21rem); }
+.wide-chart .plot { height:clamp(9rem,13vw,13rem); }
 .chart-heading select { width:auto; }
 .detail-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,185px),1fr)); gap:1rem; margin-top:.8rem; }
 .detail-grid dd { margin-top:.25rem; overflow-wrap:anywhere; }

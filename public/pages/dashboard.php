@@ -23,7 +23,7 @@ $groups = [
       <div class="chart-heading"><h3><?=e($label)?></h3><?php if ($key === 'network'): ?>
         <select class="form-select" id="interface" aria-label="Interface jaringan"></select><?php endif; ?></div>
       <strong id="value-<?=e($key)?>">—</strong>
-      <div class="plot"><canvas id="chart-<?=e($key)?>" aria-label="<?=e($label)?> selama satu jam" role="img"></canvas></div>
+      <div class="plot"><canvas id="chart-<?=e($key)?>" aria-label="<?=e($label)?> selama 10 menit terakhir" role="img"></canvas></div>
     </section>
   <?php endforeach; ?></div>
   </section>

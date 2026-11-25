@@ -42,6 +42,7 @@ $routes = [
     '/settings/cron' => __DIR__ . '/admin/cron.php',
     '/settings/dnsperf' => __DIR__ . '/admin/dnsperf.php',
     '/settings/domains' => __DIR__ . '/admin/domains.php',
+    '/settings/update' => __DIR__ . '/admin/update.php',
     '/admin' => __DIR__ . '/admin/index.php',
     '/admin/index' => __DIR__ . '/admin/index.php',
     '/admin/unbound' => __DIR__ . '/admin/unbound.php',
