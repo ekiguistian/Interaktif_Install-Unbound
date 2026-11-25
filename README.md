@@ -75,22 +75,20 @@ Installer menerapkan source terbaru, migrasi database, dan pengaturan layanan. A
 
 ## Blocklist dan whitelist
 
-1. Buka **Unbound → Blocklist & whitelist**. Delapan sumber dari TrustPositif dan StevenBlack sudah disiapkan. Pilih sumber yang ingin diaktifkan; sumber tetap bisa ditambah, diubah, atau dihapus.
-2. Isi URL whitelist otomatis dan **IP redirect**. Nilai awal memakai [whitelist-host](https://raw.githubusercontent.com/ekiguistian/whitelist-host/refs/heads/main/whitelist-domain.txt) dan IP privat `192.168.1.2`. Ganti IP redirect sesuai server tujuan di jaringanmu.
-3. Tambahkan pengecualian di **Whitelist manual**. Daftar ini tetap tersimpan dan digabung dengan whitelist URL saat sinkronisasi. Kosongkan URL jika hanya ingin memakai daftar manual.
-4. Centang filter yang dibutuhkan, lalu pilih **Terapkan & perbarui cron**. Update otomatis berjalan pukul **03.15 waktu server**. Untuk menjalankan langsung, pilih **Update & Apply Now**.
-
-Format sumber yang didukung: domain biasa, hosts, URL, Adblock, CSV, dan JSON. Blocklist dinormalisasi dan dideduplikasi. Whitelist mengecualikan domain beserta subdomainnya; penulisan `www.` pada whitelist tetap dipertahankan.
-
-Daftar jutaan domain membutuhkan RAM untuk resolver dan validasi. VM 2 GB tidak cukup untuk gabungan seluruh sumber bawaan.
-
-Hasil filter ditulis ke `/etc/unbound/blocklist/blocklist.conf`. Jika konfigurasi sudah meng-include file itu di dalam `server:`, panel langsung memakainya. Untuk konfigurasi yang memakai folder `unbound.conf.d`, panel membuat file include miliknya sendiri. Jika keduanya belum ada, tambahkan baris ini lewat editor Unbound:
+1. Buka **Unbound → Blocklist & whitelist**. Tambahkan URL HTTPS publik. Ekstensi file bebas selama isinya berupa daftar domain, hosts, URL, Adblock, CSV, atau JSON.
+2. Isi **IP redirect** dan URL whitelist jika diperlukan. Tambahkan pengecualian melalui **Whitelist manual**.
+3. Jika sebelumnya memakai filter otomatis versi lama, matikan kedua filter terlebih dahulu. Buka editor Unbound, lalu tambahkan sendiri baris untuk setiap filter yang dipakai di dalam bagian `server:` pada `/etc/unbound/unbound.conf`.
 
 ```conf
-include-toplevel: "/etc/unbound/unbound.conf.d/*.conf"
+    include: "/etc/unbound/blocklist/blocklist.conf"
+    include: "/etc/unbound/blocklist/whitelist.conf"
 ```
 
-Panel memvalidasi konfigurasi sebelum reload. Unduhan atau penerapan yang gagal mempertahankan filter sebelumnya. Saat kedua filter dimatikan, aturan panel dikosongkan dan cron autoupdate dilepas.
+4. Pilih **Simpan & muat ulang**. Kembali ke menu filter, lalu pilih **Terapkan & perbarui cron**. Sinkronisasi harian berjalan pukul **03.15 waktu server**. Pilih **Update & Apply Now** untuk menjalankannya langsung.
+
+Installer menyiapkan file kosong jika belum ada, agar include bisa divalidasi sebelum aktivasi. Anda yang menentukan baris include. Jika `unbound.conf` meng-include `90-unbound-web-blocklist.conf` secara langsung, hapus baris lama itu sebelum mematikan filter. Panel menghapus file penghubung lama saat sinkronisasi pertama berhasil. Saat filter dimatikan, file terkait dikosongkan agar include tetap valid.
+
+`blocklist.conf` memuat aturan redirect setelah domain whitelist dikeluarkan. `whitelist.conf` memuat aturan pengecualian untuk subdomain yang masih berada di bawah domain yang diblokir. Daftar whitelist lengkap tersedia di `/var/lib/unbound-web-filters/last-verified-whitelist.txt`. Sinkronisasi yang gagal mempertahankan filter sebelumnya.
 
 Jika sebelumnya memakai `autoupdate-blocklist.py`, nonaktifkan jadwal script lama agar tidak menulis file yang sama. Hasil pemrosesan tersimpan di `/var/lib/unbound-web-filters/` dan log di `/var/log/unbound-web-filters.log`.
 
@@ -104,6 +102,14 @@ flowchart LR
     F -->|Valid| G["Reload Unbound"]
     F -->|Gagal| H["Pulihkan file sebelumnya"]
 ```
+
+## Konfigurasi dan keamanan DNS
+
+Di menu **Unbound**, gunakan **Cek konfigurasi Unbound** untuk memvalidasi file di server dan **Reload server DNS** untuk memuat ulang layanan. **Simpan & muat ulang** menerapkan perubahan dari editor ke `/etc/unbound/unbound.conf` dan mencatat konfigurasi yang berhasil diterapkan ke database.
+
+- **Root hints**. Unduh atau perbarui daftar resmi dari InterNIC, lalu pilih **Aktifkan root hints**. File tersimpan di `/etc/unbound/unbound-web-root.hints`.
+- **DNSSEC**. Jika alatnya belum tersedia, jalankan `sudo apt install unbound-anchor`. Pilih **Siapkan / perbarui trust anchor**, lalu **Aktifkan DNSSEC**. Trust anchor disimpan di `/var/lib/unbound/root.key`.
+- **Sertifikat kontrol**. Tombol **Buat sertifikat kontrol** membuat file TLS `unbound-control` di `/etc/unbound`. Gunakan file tersebut melalui bagian `remote-control`.
 
 ## Monitoring dan kontrol
 

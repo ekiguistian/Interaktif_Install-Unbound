@@ -91,6 +91,16 @@ id unbound-web >/dev/null 2>&1 || useradd --system --user-group --home-dir /none
 install -d -m 0750 -o root -g unbound-web "$conf"
 install -d -m 0750 -o unbound-web -g unbound-web /var/lib/unbound-web
 install -d -m 0750 -o root -g unbound-web /var/lib/unbound-web-filters
+if [[ -d /etc/unbound && ! -L /etc/unbound/blocklist ]]; then
+    if [[ ! -d /etc/unbound/blocklist ]]; then install -d -m 0755 /etc/unbound/blocklist; fi
+    printf '# Filter Unbound Web Manager belum aktif.\n' > "$tmp/empty-filter"
+    for list in blocklist whitelist; do
+        filter_file=/etc/unbound/blocklist/$list.conf
+        if [[ ! -e $filter_file && ! -L $filter_file ]]; then
+            install -m 0644 "$tmp/empty-filter" "$filter_file"
+        fi
+    done
+fi
 install -d -m 0700 -o unbound-web -g unbound-web /var/lib/php/unbound-web-sessions
 install -d -m 0755 "$dest"
 for folder in app bin database public src; do

@@ -26,16 +26,47 @@ try {
             }
             session_write_close();
             set_time_limit(0);
+            if ($service === 'unbound') {
+                $pdo->beginTransaction();
+                $save = $pdo->prepare('INSERT INTO unbound_config (id,content) VALUES (1,?) ON DUPLICATE KEY UPDATE content=VALUES(content)');
+                $save->execute([$content]);
+            }
             $result = manage(['config-save', $service, $revision], $content, 600);
+            if ($service === 'unbound') {
+                if ($result['code'] === 0) $pdo->commit();
+                else $pdo->rollBack();
+            }
             json_response(['ok' => $result['code'] === 0, 'message' => trim($result['output'])], $result['code'] === 0 ? 200 : 422);
 
         case 'unbound-restart':
         case 'unbound-reload':
+        case 'unbound-check':
+        case 'root-hints-update':
+        case 'root-hints-enable':
+        case 'root-hints-disable':
+        case 'dnssec-anchor':
+        case 'dnssec-enable':
+        case 'dnssec-disable':
+        case 'control-certificates':
         case 'stats':
         case 'firewall-reload':
-            $timeout = in_array($action, ['unbound-restart','unbound-reload'], true) ? 600 : 45;
+            $timeout = in_array($action, ['stats','firewall-reload'], true) ? 45 : 600;
             if ($timeout === 600) { session_write_close(); set_time_limit(0); }
+            if (in_array($action, ['root-hints-enable','root-hints-disable','dnssec-enable','dnssec-disable'], true)) {
+                $pdo->beginTransaction();
+                $pdo->exec("INSERT IGNORE INTO unbound_config (id,content) VALUES (1,'')");
+                $pdo->query('SELECT id FROM unbound_config WHERE id=1 FOR UPDATE')->fetch();
+            }
             $result = manage([$action], null, $timeout);
+            if ($pdo->inTransaction()) {
+                if ($result['code'] === 0) {
+                    $config = json_decode($result['output'], true);
+                    if (!isset($config['content'])) throw new RuntimeException('Gagal membaca konfigurasi yang diterapkan.');
+                    $pdo->prepare('UPDATE unbound_config SET content=? WHERE id=1')->execute([$config['content']]);
+                    $pdo->commit();
+                    $result['output'] = 'Konfigurasi tersimpan dan Unbound sudah dimuat ulang.';
+                } else $pdo->rollBack();
+            }
             json_response(['ok' => $result['code'] === 0, 'message' => trim($result['output']) ?: 'Selesai.'], $result['code'] === 0 ? 200 : 422);
 
         case 'filters-save':

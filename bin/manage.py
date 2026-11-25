@@ -3,6 +3,7 @@
 import contextlib
 import fcntl
 import glob
+import grp
 import hashlib
 import json
 import os
@@ -20,6 +21,8 @@ WORKER_CRON = Path("/etc/cron.d/unbound-web")
 HELPER = "/usr/local/sbin/unbound-web-manage"
 CONTROL_CACHE = Path("/var/lib/unbound-web-filters/control-client.conf")
 CONTROL_META = CONTROL_CACHE.with_suffix(".json")
+ROOT_HINTS = Path("/etc/unbound/unbound-web-root.hints")
+ROOT_KEY = Path("/var/lib/unbound/root.key")
 AGENTS = {
     "zabbix-agent2": Path("/etc/zabbix/zabbix_agent2.conf"),
     "zabbix-agent": Path("/etc/zabbix/zabbix_agentd.conf"),
@@ -98,6 +101,7 @@ def control_config():
             pass
         watched, server, remote = {}, [], []
         managed = {Path("/etc/unbound/blocklist/blocklist.conf"),
+                   Path("/etc/unbound/blocklist/whitelist.conf"),
                    Path("/etc/unbound/unbound.conf.d/90-unbound-web-blocklist.conf")}
         remote_keys = {"control-enable", "control-interface", "control-port", "control-use-cert",
                        "server-key-file", "server-cert-file", "control-key-file", "control-cert-file"}
@@ -168,6 +172,18 @@ def editor(operation, name, revision=None):
     if revision != digest:
         raise ValueError("File berubah sejak dibuka. Muat ulang sebelum menyimpan.")
     data = sys.stdin.buffer.read(1048577)
+    apply_config(unit, path, old, data)
+    print("File tersimpan dan layanan sudah dimuat ulang.")
+
+
+def checked(*args):
+    result = subprocess.run(host_command(*args), capture_output=True, text=True, timeout=240)
+    if result.returncode:
+        raise ValueError((result.stderr + result.stdout).strip() or "Validasi konfigurasi gagal.")
+    return result.stdout.strip()
+
+
+def apply_config(unit, path, old, data):
     if not data.strip() or len(data) > 1048576 or b"\x00" in data:
         raise ValueError("Isi file kosong atau terlalu besar.")
     stat = path.stat()
@@ -178,13 +194,11 @@ def editor(operation, name, revision=None):
             staged.write(data)
             os.fchown(staged.fileno(), *attrs[1])
             os.fchmod(staged.fileno(), attrs[0])
-        if name == "unbound":
-            command(*host_command("/usr/sbin/unbound-checkconf", candidate))
-            daemon_user = subprocess.check_output(
-                host_command("/usr/sbin/unbound-checkconf", "-o", "username", candidate), text=True
-            ).strip()
+        if unit == "unbound":
+            # -o validates the whole candidate while reading its daemon username.
+            daemon_user = checked("/usr/sbin/unbound-checkconf", "-o", "username", candidate)
             if daemon_user:
-                command(*host_command("/usr/sbin/runuser", "-u", daemon_user, "--", "/usr/sbin/unbound-checkconf", candidate))
+                checked("/usr/sbin/runuser", "-u", daemon_user, "--", "/usr/sbin/unbound-checkconf", candidate)
         else:
             binary = "zabbix_agent2" if unit == "zabbix-agent2" else "zabbix_agentd"
             help_text = subprocess.check_output([binary, "--help"], text=True)
@@ -197,13 +211,113 @@ def editor(operation, name, revision=None):
         Path(candidate).unlink(missing_ok=True)
     try:
         # Agent units without ExecReload require restart for full config changes.
-        command("systemctl", "reload" if name == "unbound" else "reload-or-restart", unit)
+        command("systemctl", "reload" if unit == "unbound" else "reload-or-restart", unit)
         command("systemctl", "is-active", "--quiet", unit)
     except (OSError, subprocess.SubprocessError):
         atomic(path, old, *attrs)
         command("systemctl", "reload-or-restart", unit)
         raise
-    print("File tersimpan dan layanan sudah dimuat ulang.")
+
+
+def root_hints_update():
+    with tempfile.TemporaryDirectory() as stage:
+        source = Path(stage, "named.root")
+        command("/usr/bin/curl", "--fail", "--silent", "--show-error", "--noproxy", "*",
+                "--proto", "=https", "--max-time", "30", "--max-filesize", "65536",
+                "--output", source, "https://www.internic.net/domain/named.root")
+        content = source.read_bytes()
+        if len(content) > 65536:
+            raise ValueError("Isi root hints tidak valid.")
+        names = set(re.findall(rb"(?im)^\.\s+(?:\d+\s+)?(?:IN\s+)?NS\s+([A-M])\.ROOT-SERVERS\.NET\.", content.upper()))
+        if len(names) != 13:
+            raise ValueError("Root hints harus memuat 13 nama root server.")
+    if ROOT_HINTS.is_symlink():
+        raise ValueError("File root hints tidak boleh berupa symlink.")
+    previous = ROOT_HINTS.read_bytes() if ROOT_HINTS.exists() else None
+    atomic(ROOT_HINTS, content)
+    try:
+        if checked("/usr/sbin/unbound-checkconf", "-o", "root-hints", UNBOUND) == str(ROOT_HINTS):
+            command("systemctl", "reload", "unbound")
+    except (ValueError, OSError, subprocess.SubprocessError):
+        if previous is None:
+            ROOT_HINTS.unlink(missing_ok=True)
+        else:
+            atomic(ROOT_HINTS, previous)
+        raise
+    print(f"Root hints tersimpan di {ROOT_HINTS}.")
+
+
+def dnssec_anchor():
+    tool = Path("/usr/sbin/unbound-anchor")
+    if not tool.is_file():
+        raise ValueError("Pasang alat trust anchor dengan sudo apt install unbound-anchor.")
+    if not ROOT_KEY.parent.is_dir() or ROOT_KEY.is_symlink():
+        raise ValueError("Lokasi trust anchor harus berupa file biasa di /var/lib/unbound.")
+    result = subprocess.run(["/usr/sbin/runuser", "-u", "unbound", "--", tool, "-v", "-a", ROOT_KEY],
+                            capture_output=True, text=True, timeout=90)
+    if result.returncode not in (0, 1) or not ROOT_KEY.is_file() or ROOT_KEY.stat().st_size == 0:
+        raise ValueError((result.stdout + result.stderr).strip() or "Trust anchor gagal disiapkan.")
+    print(f"Trust anchor tersedia di {ROOT_KEY}.")
+
+
+def control_certificates():
+    names = ["unbound_server.key", "unbound_server.pem", "unbound_control.key", "unbound_control.pem"]
+    targets = [UNBOUND.parent / name for name in names]
+    if any(path.exists() or path.is_symlink() for path in targets):
+        if all(path.is_file() and not path.is_symlink() for path in targets):
+            print("Sertifikat kontrol sudah tersedia di /etc/unbound.")
+            return
+        raise ValueError("File sertifikat kontrol lama tidak lengkap. Periksa file di /etc/unbound.")
+    with tempfile.TemporaryDirectory() as stage:
+        command("/usr/sbin/unbound-control-setup", "-d", stage)
+        group = grp.getgrnam("unbound").gr_gid
+        created = []
+        try:
+            for target in targets:
+                atomic(target, Path(stage, target.name).read_bytes(), 0o640, (0, group))
+                created.append(target)
+        except OSError:
+            for target in created:
+                target.unlink()
+            raise
+    print("Sertifikat kontrol dibuat di /etc/unbound. Atur bagian remote-control untuk menggunakannya.")
+
+
+def set_resolver_feature(op):
+    path = UNBOUND.resolve(strict=True)
+    old = path.read_bytes()
+    body = old.decode()
+    feature, action = op.rsplit("-", 1)
+    marker = "# Unbound Web Manager " + feature
+    body = re.sub(r"(?ms)^" + re.escape(marker) + r" begin\n.*?^" + re.escape(marker) + r" end\n?", "", body)
+    if feature == "root-hints":
+        directives = []
+        if action == "enable":
+            if not ROOT_HINTS.is_file() or ROOT_HINTS.is_symlink():
+                raise ValueError("Unduh root hints terlebih dahulu.")
+            directives = [f'root-hints: "{ROOT_HINTS}"']
+        elif re.search(r'(?m)^\s*root-hints\s*:', body):
+            raise ValueError("Root hints juga diatur manual. Hapus arahan root-hints lewat editor.")
+    else:
+        modules = checked("/usr/sbin/unbound-checkconf", "-o", "module-config", UNBOUND).split()
+        if action == "enable" and "validator" not in modules:
+            modules.insert(modules.index("iterator") if "iterator" in modules else 0, "validator")
+        if action == "disable":
+            modules = [module for module in modules if module != "validator"]
+        directives = [f'module-config: "{" ".join(modules)}"']
+        if action == "enable":
+            if not ROOT_KEY.is_file() or not ROOT_KEY.stat().st_size:
+                raise ValueError("Siapkan trust anchor terlebih dahulu.")
+            # Ubuntu normally includes this packaged root anchor already.
+            configs = [body] + [p.read_text() for p in UNBOUND.parent.glob("unbound.conf.d/*.conf")
+                                if p.name != "90-unbound-web-blocklist.conf"]
+            if not any(re.search(r'(?m)^\s*auto-trust-anchor-file:\s*"?' + re.escape(str(ROOT_KEY)) + r'(?:"|\s|$)', item) for item in configs):
+                directives.append(f'auto-trust-anchor-file: "{ROOT_KEY}"')
+    if directives:
+        body = body.rstrip() + "\n\n" + marker + " begin\nserver:\n"
+        body += "".join("    " + directive + "\n" for directive in directives) + marker + " end\n"
+    apply_config("unbound", path, old, body.encode())
+    print(json.dumps({"content": body}))
 
 
 def flags():
@@ -251,6 +365,16 @@ def main(args):
         with lock():
             if op == "config-save" and len(params) == 2:
                 editor(op, *params)
+            elif op == "unbound-check" and not params:
+                print(checked("/usr/sbin/unbound-checkconf", UNBOUND))
+            elif op == "root-hints-update" and not params:
+                root_hints_update()
+            elif op == "dnssec-anchor" and not params:
+                dnssec_anchor()
+            elif op == "control-certificates" and not params:
+                control_certificates()
+            elif op in ("root-hints-enable", "root-hints-disable", "dnssec-enable", "dnssec-disable") and not params:
+                set_resolver_feature(op)
             elif op in ("unbound-restart", "unbound-reload") and not params:
                 command(*host_command("/usr/sbin/unbound-checkconf", str(UNBOUND)))
                 command("systemctl", op.split("-")[1], "unbound")

@@ -6,7 +6,7 @@
       event.preventDefault();
       if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) return;
       const button = form.querySelector('[type="submit"]');
-      const output = form.querySelector('[data-result]') || document.querySelector('[data-page-result]');
+      const output = form.querySelector('[data-result]') || document.querySelector(form.dataset.output || '[data-page-result]');
       if (button) { button.disabled = true; button.dataset.oldText = button.innerHTML; button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Memproses'; }
       if (output) output.textContent = '';
       try {
@@ -15,7 +15,10 @@
           method: 'POST', headers: {'Content-Type':'application/json','X-CSRF-Token':csrf},
           body: JSON.stringify({...data, action: form.dataset.api})
         });
-        const result = await response.json();
+        const body = await response.text();
+        let result;
+        try { result = JSON.parse(body); }
+        catch (_) { throw new Error('Server tidak mengirim hasil (HTTP ' + response.status + '). Muat ulang halaman dan cek status sebelum mengulang.'); }
         if (output) {
           output.textContent = result.message || (result.ok ? 'Berhasil.' : 'Permintaan gagal.');
         }

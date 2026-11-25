@@ -3,9 +3,10 @@ declare(strict_types=1);
 require_once __DIR__ . '/domains.php';
 
 const FILTER_OUTPUT = '/etc/unbound/blocklist/blocklist.conf';
+const WHITELIST_OUTPUT = '/etc/unbound/blocklist/whitelist.conf';
 const FILTER_INCLUDE = '/etc/unbound/unbound.conf.d/90-unbound-web-blocklist.conf';
 const FILTER_STATE = '/var/lib/unbound-web-filters';
-const FILTER_DEFAULT_WHITELIST = 'https://raw.githubusercontent.com/ekiguistian/whitelist-host/refs/heads/main/whitelist-domain.txt';
+const FILTER_DEFAULT_WHITELIST = '';
 const FILTER_DEFAULT_REDIRECT = '192.168.1.2';
 
 function filter_options(PDO $pdo): array
@@ -82,7 +83,7 @@ function filter_is_allowed(string $domain, array $whitelist): bool
     return false;
 }
 
-function filter_config_lines(array $blocked, array $whitelist, string $redirect): Generator
+function filter_config_lines(array $blocked, string $redirect): Generator
 {
     if (filter_var($redirect, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) === false) throw new RuntimeException('IP redirect tidak valid.');
     yield "# Dikelola Unbound Web Manager.\n";
@@ -90,7 +91,12 @@ function filter_config_lines(array $blocked, array $whitelist, string $redirect)
         yield 'local-zone: "' . $domain . '." redirect' . "\n";
         yield 'local-data: "' . $domain . '. A ' . $redirect . '"' . "\n";
     }
-    // A child exception must also bypass a redirect zone on its parent.
+}
+
+function whitelist_config_lines(array $blocked, array $whitelist): Generator
+{
+    yield "# Dikelola Unbound Web Manager.\n";
+    // Override a matching parent redirect without taking over unrelated local zones.
     foreach ($whitelist as $domain => $_) {
         $parent = $domain;
         while (($dot = strpos($parent, '.')) !== false) {
@@ -110,10 +116,13 @@ function filter_has_include(string $config, string $target, array &$seen = [], b
     if (isset($seen[$real]) || ($skipManaged && $real === FILTER_INCLUDE) || !is_file($config)) return false;
     $seen[$real] = true;
     if (count($seen) > 256) throw new RuntimeException('Terlalu banyak file include Unbound.');
-    foreach (file($config) as $line) {
+    if (in_array($real, [FILTER_OUTPUT, WHITELIST_OUTPUT], true)) return false;
+    foreach (new SplFileObject($config) as $line) {
         if (!preg_match('/^\s*include(?:-toplevel)?:\s*(?:"([^"]+)"|([^\s#]+))/', $line, $match)) continue;
         $pattern = $match[1] !== '' ? $match[1] : $match[2];
-        if (!str_starts_with($pattern, '/')) $pattern = '/etc/unbound/' . $pattern;
+        if (!str_starts_with($pattern, '/') && !(PHP_OS_FAMILY === 'Windows' && preg_match('~^[A-Za-z]:/~', $pattern))) {
+            $pattern = '/etc/unbound/' . $pattern;
+        }
         if ($pattern === $target || fnmatch($pattern, $target, FNM_PATHNAME)) return true;
         foreach (glob($pattern) ?: [] as $child) {
             if (filter_has_include($child, $target, $seen, $skipManaged)) return true;

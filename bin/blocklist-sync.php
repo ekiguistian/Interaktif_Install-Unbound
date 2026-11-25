@@ -82,11 +82,20 @@ try {
     if ($argc !== 3 || !in_array($argv[1], ['0','1'], true) || !in_array($argv[2], ['0','1'], true)) throw new RuntimeException('Status filter tidak valid.');
     if (!is_file('/etc/unbound/unbound.conf')) throw new RuntimeException('Konfigurasi Unbound belum tersedia.');
     if (!is_dir(FILTER_STATE) || is_link(FILTER_STATE) || fileowner(FILTER_STATE) !== 0) throw new RuntimeException('Direktori sinkronisasi belum siap. Jalankan kembali install.sh.');
+    foreach ([FILTER_OUTPUT, WHITELIST_OUTPUT] as $index => $path) {
+        if ($argv[$index + 1] === '1') {
+            $seen = [];
+            if (!filter_has_include('/etc/unbound/unbound.conf', $path, $seen)) {
+                throw new RuntimeException('Tambahkan include: "' . $path . '" di dalam server: pada /etc/unbound/unbound.conf, lalu coba lagi.');
+            }
+        }
+    }
     $stage = FILTER_STATE . '/.sync-' . bin2hex(random_bytes(8));
     mkdir($stage, 0700);
     $pdo = db();
     $options = filter_options($pdo);
     $sources = $argv[1] === '1' ? $pdo->query('SELECT id,name,url FROM blocklists WHERE is_active=1 ORDER BY id')->fetchAll() : [];
+    if ($argv[1] === '1' && !$sources) throw new RuntimeException('Tambahkan dan aktifkan minimal satu sumber blocklist.');
     $counts = [];
     $blocked = [];
     $whitelist = [];
@@ -146,13 +155,19 @@ try {
         finally { fclose($handle); }
     }
     sync_log(sprintf('Normalisasi: %d unik; whitelist: %d URL + %d manual; hasil akhir: %d domain.', $normalizedCount, $remoteCount, $manualCount, count($blocked)));
-    $handle = fopen($stage . '/generated.conf', 'wb');
-    $buffer = '';
-    try {
-        foreach (filter_config_lines($blocked, $whitelist, $options['redirect_ip']) as $line) sync_buffer($handle, $buffer, $line);
-        sync_buffer($handle, $buffer, '', true);
+    $outputs = [
+        FILTER_OUTPUT => filter_config_lines($blocked, $options['redirect_ip']),
+        WHITELIST_OUTPUT => whitelist_config_lines($blocked, $whitelist),
+    ];
+    foreach ($outputs as $path => $lines) {
+        $handle = fopen($stage . '/' . basename($path), 'wb');
+        $buffer = '';
+        try {
+            foreach ($lines as $line) sync_buffer($handle, $buffer, $line);
+            sync_buffer($handle, $buffer, '', true);
+        } finally { fclose($handle); }
     }
-    finally { fclose($handle); }
+    unset($outputs, $lines);
     $finalCount = count($blocked);
     $whitelistCount = count($whitelist);
     // Leave RAM available for unbound-checkconf and the resolver during reload.
@@ -172,7 +187,7 @@ try {
         }
         if (!is_writable($dir)) throw new RuntimeException('Direktori ' . $dir . ' read-only. Jalankan kembali install.sh agar izin layanan PHP-FPM diperbarui.');
     }
-    foreach ([FILTER_OUTPUT, FILTER_INCLUDE] as $index => $path) {
+    foreach ([FILTER_OUTPUT, WHITELIST_OUTPUT, FILTER_INCLUDE] as $index => $path) {
         if (is_link($path)) throw new RuntimeException('File filter tidak boleh berupa symlink.');
         $backups[$path] = null;
         if (is_file($path)) {
@@ -182,20 +197,10 @@ try {
             $backups[$path] = [$backup, $stat['mode'] & 0777, $stat['gid'], $stat['uid']];
         }
     }
-    $alreadyIncluded = filter_has_include('/etc/unbound/unbound.conf', FILTER_OUTPUT);
     $changed = true;
-    sync_install($stage . '/generated.conf', FILTER_OUTPUT);
-    if (in_array('1', [$argv[1], $argv[2]], true) && !$alreadyIncluded) {
-        file_put_contents($stage . '/include.conf', "# Dikelola Unbound Web Manager.\nserver:\n    include: \"" . FILTER_OUTPUT . "\"\n");
-        sync_install($stage . '/include.conf', FILTER_INCLUDE);
-    } elseif (is_file(FILTER_INCLUDE)) { unlink(FILTER_INCLUDE); }
-    if ($finalCount > 0) {
-        // Unbound 1.13 (Ubuntu 22.04) cannot print local-zone with checkconf -o.
-        $seen = [];
-        if (!filter_has_include('/etc/unbound/unbound.conf', FILTER_OUTPUT, $seen, false)) {
-            throw new RuntimeException('File filter belum terbaca. Tambahkan include-toplevel: "/etc/unbound/unbound.conf.d/*.conf" pada konfigurasi Unbound, atau include file blocklist.conf di dalam server:.');
-        }
-    }
+    sync_install($stage . '/blocklist.conf', FILTER_OUTPUT);
+    sync_install($stage . '/whitelist.conf', WHITELIST_OUTPUT);
+    if (is_file(FILTER_INCLUDE)) unlink(FILTER_INCLUDE);
     // Validate the entire configuration once, as the running daemon's user.
     // This checks include permissions on reload and avoids parsing million-domain
     // feeds three times just to discover the username and validate each file.
@@ -223,10 +228,10 @@ try {
     }
     $summary = ['updated_at' => date('Y-m-d H:i:s'), 'raw' => $rawCount, 'normalized' => $normalizedCount,
         'remote_whitelist' => $remoteCount, 'manual_whitelist' => $manualCount, 'whitelist' => $whitelistCount,
-        'removed' => $normalizedCount - $finalCount, 'final' => $finalCount, 'redirect_ip' => $options['redirect_ip'], 'output' => FILTER_OUTPUT];
+        'removed' => $normalizedCount - $finalCount, 'final' => $finalCount, 'redirect_ip' => $options['redirect_ip'], 'output' => FILTER_OUTPUT, 'whitelist_output' => WHITELIST_OUTPUT];
     file_put_contents($stage . '/status.json', json_encode($summary, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
     sync_install($stage . '/status.json', FILTER_STATE . '/status.json', 0640, 'unbound-web');
-    sync_log('Selesai. File: ' . FILTER_OUTPUT);
+    sync_log('Selesai. File: ' . FILTER_OUTPUT . ' dan ' . WHITELIST_OUTPUT);
     $changed = false;
 } catch (Throwable $error) {
     $failed = true;

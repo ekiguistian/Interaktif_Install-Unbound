@@ -13,6 +13,10 @@ page_start('Blocklist & whitelist',true);
 ?>
 <section class="panel mb-5 p-5 sm:p-6">
   <h2 class="font-semibold">Autoupdate filter DNS</h2>
+  <p class="mt-2 text-sm text-slate-400">Sebelum mengaktifkan filter, tambahkan sendiri baris include untuk filter yang dipakai di dalam bagian <code>server:</code> pada <code>/etc/unbound/unbound.conf</code>.</p>
+  <pre class="mt-2 text-sm">    include: "/etc/unbound/blocklist/blocklist.conf"
+    include: "/etc/unbound/blocklist/whitelist.conf"</pre>
+  <p class="mt-2 text-sm text-slate-400">Migrasi dari versi lama: matikan kedua filter sebelum menambahkan include baru. Jika konfigurasi meng-include file lama <code>90-unbound-web-blocklist.conf</code> secara langsung, hapus baris lama tersebut terlebih dahulu.</p>
   <p class="mt-1 text-sm leading-6 text-slate-400">Sumber digabung, domain duplikat dibuang, lalu whitelist URL dan manual diterapkan. Domain yang diblokir diarahkan ke IPv4 di bawah.</p>
   <form class="mt-5 filter-options" data-api="filter-options-save">
     <label><span class="mb-2 block text-sm">URL whitelist otomatis</span><input class="form-input" name="whitelist_url" type="url" maxlength="2048" value="<?=e($options['whitelist_url'])?>" placeholder="https://yourdomain.com/whitelist.txt"><span class="mt-1 block text-xs text-slate-500">Kosongkan untuk memakai whitelist manual saja.</span></label>
@@ -30,7 +34,7 @@ page_start('Blocklist & whitelist',true);
 </section>
 <div class="grid gap-5 xl:grid-cols-2">
   <section class="panel p-5 sm:p-6">
-    <h2 class="font-semibold">Sumber blocklist</h2><p class="mt-1 text-sm leading-6 text-slate-400">URL HTTPS publik. Mendukung domain, hosts, URL, Adblock <code>||domain^</code>, CSV, dan JSON.</p>
+    <h2 class="font-semibold">Sumber blocklist</h2><p class="mt-1 text-sm leading-6 text-slate-400">Tambahkan URL HTTPS publik. Ekstensi file bebas selama isinya daftar domain, hosts, URL, Adblock <code>||domain^</code>, CSV, atau JSON.</p>
     <form class="mt-5 grid gap-3 sm:grid-cols-2" data-api="blocklist-add"><input class="form-input" name="name" maxlength="120" placeholder="Nama sumber" required><input class="form-input sm:col-span-2" name="url" type="url" placeholder="https://yourdomain.com/blocklist.txt" required><button class="btn-primary sm:col-span-2 sm:w-fit" type="submit"><i class="fa-solid fa-plus"></i>Tambah sumber</button><p data-result class="text-sm text-cyan-200 sm:col-span-2"></p></form>
     <div class="mt-5 overflow-x-auto"><table class="w-full min-w-[42rem] text-left text-sm"><thead class="text-xs uppercase text-slate-500"><tr><th class="py-3">Sumber</th><th>Domain</th><th>Terakhir update</th><th></th></tr></thead><tbody class="divide-y divide-slate-800">
       <?php foreach($sources as $source): ?><tr><td class="py-3 pr-3"><form class="min-w-72 space-y-2" data-api="blocklist-update"><input type="hidden" name="id" value="<?=e($source['id'])?>"><input class="form-input" name="name" maxlength="120" value="<?=e($source['name'])?>" required><input class="form-input" name="url" type="url" value="<?=e($source['url'])?>" required><select class="form-select" name="is_active"><option value="1" <?=$source['is_active']?'selected':''?>>Aktif</option><option value="0" <?=!$source['is_active']?'selected':''?>>Nonaktif</option></select><button class="btn-secondary" type="submit"><i class="fa-solid fa-floppy-disk"></i>Simpan sumber</button><p data-result class="text-xs text-cyan-200"></p></form><?php if($source['last_error']): ?><div class="mt-1 text-xs text-rose-300"><?=e($source['last_error'])?></div><?php endif; ?></td><td><?=number_format((int)$source['domain_count'],0,',','.')?></td><td class="text-xs text-slate-400"><?=e($source['last_updated']??'Belum pernah')?></td><td><form data-api="blocklist-delete"><input type="hidden" name="id" value="<?=e($source['id'])?>"><button class="btn-danger" type="submit"><i class="fa-solid fa-trash"></i>Hapus</button></form></td></tr><?php endforeach; ?>

@@ -7,7 +7,7 @@ function expect(bool $condition, string $message): void
     if (!$condition) throw new RuntimeException($message);
 }
 
-$directory = sys_get_temp_dir() . '/unbound-filter-test-' . bin2hex(random_bytes(6));
+$directory = str_replace('\\', '/', sys_get_temp_dir()) . '/unbound-filter-test-' . bin2hex(random_bytes(6));
 mkdir($directory, 0700);
 try {
     $fixtures = [
@@ -32,10 +32,13 @@ try {
     expect(filter_is_allowed('a.b.allow.example', $allowed), 'Allowed subtree was blocked');
     expect(!filter_is_allowed('notallow.example', $allowed), 'Suffix must match a whole label');
     expect(!filter_is_allowed('only.example', $allowed), 'www exception must not allow its parent');
-    $config = implode('', iterator_to_array(filter_config_lines(['block.example'=>true,'only.example'=>true], $allowed, '192.168.1.2')));
+    $blocked = ['block.example'=>true,'only.example'=>true];
+    $config = implode('', iterator_to_array(filter_config_lines($blocked, '192.168.1.2')));
+    $exceptions = implode('', iterator_to_array(whitelist_config_lines($blocked, $allowed)));
+    expect(!str_contains($config, 'transparent'), 'Whitelist leaked into blocklist.conf');
     expect(str_contains($config, 'local-data: "block.example. A 192.168.1.2"'), 'Redirect missing');
-    expect(str_contains($config, 'local-zone: "child.block.example." transparent'), 'Child whitelist under a blocked parent missing');
-    expect(str_contains($config, 'local-zone: "www.only.example." transparent'), 'www exception missing');
+    expect(str_contains($exceptions, 'local-zone: "child.block.example." transparent'), 'Child whitelist under a blocked parent missing');
+    expect(str_contains($exceptions, 'local-zone: "www.only.example." transparent'), 'www exception missing');
     file_put_contents($directory . '/main.conf', '# include: "' . FILTER_OUTPUT . '"' . "\ninclude-toplevel: \"$directory/nested.conf\"\n");
     file_put_contents($directory . '/nested.conf', 'server:' . "\n include: \"" . FILTER_OUTPUT . "\"\n");
     expect(filter_has_include($directory . '/main.conf', FILTER_OUTPUT), 'Nested existing include not detected');
