@@ -58,3 +58,5 @@ try {
     error_log('Unbound Web metrics: ' . $error->getMessage());
     json_response(['ok'=>false, 'message'=>'Riwayat metrik belum dapat dibaca.'], 503);
 }
+
+// System ini di buat dan hasil ide oleh Eki Guistian, Anda boleh memakai dan memdifikasi dengan syarat tetap membuka code ke public dan mencatumkan sumber dari Eki guistian. sesuai aturan opensource

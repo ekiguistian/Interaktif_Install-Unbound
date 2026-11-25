@@ -139,3 +139,5 @@ page_start('Firewall UFW', true);
 </section>
 <?php endif; ?>
 <?php page_end(); ?>
+
+<?php // System ini di buat dan hasil ide oleh Eki Guistian, Anda boleh memakai dan memdifikasi dengan syarat tetap membuka code ke public dan mencatumkan sumber dari Eki guistian. sesuai aturan opensource

@@ -16,3 +16,5 @@ if ($config === null) { notice(trim($result['output']), 'error'); } else { ?>
   <button class="btn-primary" type="submit">Simpan &amp; muat ulang</button><p data-result role="status"></p>
 </form>
 <?php } page_end(); ?>
+
+<?php // System ini di buat dan hasil ide oleh Eki Guistian, Anda boleh memakai dan memdifikasi dengan syarat tetap membuka code ke public dan mencatumkan sumber dari Eki guistian. sesuai aturan opensource

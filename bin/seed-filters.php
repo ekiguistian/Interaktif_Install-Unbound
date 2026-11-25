@@ -9,3 +9,5 @@ $insertSetting = $pdo->prepare('INSERT IGNORE INTO app_settings (setting_key,set
 $insertSetting->execute(['whitelist_url', FILTER_DEFAULT_WHITELIST]);
 $insertSetting->execute(['blocklist_redirect_ip', FILTER_DEFAULT_REDIRECT]);
 $pdo->commit();
+
+// System ini di buat dan hasil ide oleh Eki Guistian, Anda boleh memakai dan memdifikasi dengan syarat tetap membuka code ke public dan mencatumkan sumber dari Eki guistian. sesuai aturan opensource

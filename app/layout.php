@@ -101,3 +101,5 @@ function notice(string $text, string $kind = 'info'): void
     $styles = $kind === 'error' ? 'border-rose-500/40 bg-rose-500/10 text-rose-200' : 'border-cyan-500/30 bg-cyan-500/10 text-cyan-100';
     echo '<div class="mb-5 rounded-xl border px-4 py-3 text-sm ' . $styles . '">' . e($text) . '</div>';
 }
+
+// System ini di buat dan hasil ide oleh Eki Guistian, Anda boleh memakai dan memdifikasi dengan syarat tetap membuka code ke public dan mencatumkan sumber dari Eki guistian. sesuai aturan opensource

@@ -209,3 +209,5 @@ try {
     error_log('Unbound Web action: ' . $error->getMessage());
     json_response(['ok'=>false,'message'=>'Aksi gagal. Periksa log aplikasi dan status service.'],500);
 }
+
+// System ini di buat dan hasil ide oleh Eki Guistian, Anda boleh memakai dan memdifikasi dengan syarat tetap membuka code ke public dan mencatumkan sumber dari Eki guistian. sesuai aturan opensource

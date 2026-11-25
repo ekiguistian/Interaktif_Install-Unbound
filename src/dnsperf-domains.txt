@@ -98,3 +98,5 @@ bca.co.id A
 bankmandiri.co.id A
 bri.co.id A
 bni.co.id A
+
+# System ini di buat dan hasil ide oleh Eki Guistian, Anda boleh memakai dan memdifikasi dengan syarat tetap membuka code ke public dan mencatumkan sumber dari Eki guistian. sesuai aturan opensource

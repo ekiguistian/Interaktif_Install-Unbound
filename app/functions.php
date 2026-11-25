@@ -151,3 +151,5 @@ function manage(array $args, ?string $input = null, int $timeout = 45): array
 {
     return CommandRunner::run(['/usr/bin/sudo', '-n', '/usr/local/sbin/unbound-web-manage', ...$args], $timeout, $input);
 }
+
+// System ini di buat dan hasil ide oleh Eki Guistian, Anda boleh memakai dan memdifikasi dengan syarat tetap membuka code ke public dan mencatumkan sumber dari Eki guistian. sesuai aturan opensource

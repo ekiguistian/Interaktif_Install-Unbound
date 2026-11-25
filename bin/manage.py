@@ -498,3 +498,5 @@ if __name__ == "__main__":
         sys.exit("Operasi lain masih berjalan.")
     except (ValueError, OSError, subprocess.SubprocessError) as error:
         sys.exit(str(error))
+
+# System ini di buat dan hasil ide oleh Eki Guistian, Anda boleh memakai dan memdifikasi dengan syarat tetap membuka code ke public dan mencatumkan sumber dari Eki guistian. sesuai aturan opensource

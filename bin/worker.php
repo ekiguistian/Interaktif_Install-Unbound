@@ -175,3 +175,5 @@ try {
     fwrite(STDERR, 'Worker gagal. Periksa journal dan konfigurasi aplikasi. ' . $error->getMessage() . "\n");
     exit(1);
 }
+
+// System ini di buat dan hasil ide oleh Eki Guistian, Anda boleh memakai dan memdifikasi dengan syarat tetap membuka code ke public dan mencatumkan sumber dari Eki guistian. sesuai aturan opensource

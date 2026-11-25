@@ -71,3 +71,5 @@ CREATE TABLE IF NOT EXISTS login_attempts (
     attempted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_login_attempts_addr_time (remote_addr, attempted_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+-- System ini di buat dan hasil ide oleh Eki Guistian, Anda boleh memakai dan memdifikasi dengan syarat tetap membuka code ke public dan mencatumkan sumber dari Eki guistian. sesuai aturan opensource

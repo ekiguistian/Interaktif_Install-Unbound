@@ -72,11 +72,30 @@ flowchart LR
     D["Sumber blocklist + whitelist"] --> E["Pisahkan file filter"] --> F["Validasi dan reload Unbound"]
 ```
 
-<details>
-<summary>Screenshot versi sebelumnya</summary>
+## Screenshot
 
-![Halaman login](docs/screenshots/login.png)
-![Monitoring Unbound](docs/screenshots/monitoring-unbound.png)
-![Monitoring Linux dan jaringan](docs/screenshots/monitoring-linux.png)
+### Login
 
-</details>
+![Login dengan tema gelap](docs/screenshots/login-tema-gelap.png)
+
+### Monitoring
+
+![Dashboard statistik DNS dan grafik QPS, cache, serta latensi](docs/screenshots/monitoring-dns.png)
+
+![Grafik CPU, memori, dan disk](docs/screenshots/monitoring-sumber-daya.png)
+
+![Grafik RX dan TX serta statistik server](docs/screenshots/monitoring-jaringan.png)
+
+### Kontrol server
+
+![Kontrol Unbound, root hints, DNSSEC, dan sertifikat](docs/screenshots/kontrol-unbound.png)
+
+![Status firewall UFW dan aturan yang tersimpan](docs/screenshots/firewall-ufw.png)
+
+![Status worker monitoring dan jadwal filter](docs/screenshots/jadwal-worker.png)
+
+## Atribusi
+
+Ide dan pengembangan sistem oleh Eki Guistian. Catatan atribusi di akhir file menyampaikan permintaan pengembang untuk mencantumkan sumber dan membuka kode perubahan. Ketentuan lisensi repositori tercantum di [LICENSE](LICENSE), dan lisensi komponen eksternal tercantum di [THIRD-PARTY.txt](public/assets/THIRD-PARTY.txt).
+
+<!-- System ini di buat dan hasil ide oleh Eki Guistian, Anda boleh memakai dan memdifikasi dengan syarat tetap membuka code ke public dan mencatumkan sumber dari Eki guistian. sesuai aturan opensource -->

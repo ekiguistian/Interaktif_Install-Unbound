@@ -10,3 +10,5 @@ Isi laporan dengan versi atau commit, fitur yang terdampak, cara mengecek masala
 - Simpan `/etc/unbound-web/.env` dan private key TLS di penyimpanan dengan akses terbatas.
 - Kalau password bocor, ganti `ADMIN_PASS` di `/etc/unbound-web/.env` dan akhiri sesi aktif. Periksa juga konfigurasi dan perubahan terakhir pada layanan.
 - Kalau private key TLS bocor, ganti key dan sertifikatnya. Perbarui sertifikat yang dipercaya di perangkat admin.
+
+<!-- System ini di buat dan hasil ide oleh Eki Guistian, Anda boleh memakai dan memdifikasi dengan syarat tetap membuka code ke public dan mencatumkan sumber dari Eki guistian. sesuai aturan opensource -->

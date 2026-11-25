@@ -20,3 +20,5 @@ page_start('Uji performa dnsperf',true);
   <div class="panel p-5 sm:p-6"><div class="flex items-center justify-between"><div><h2 class="font-semibold">Output pengujian</h2><p class="mt-1 text-sm text-slate-400">Hasil lengkap tampil per baris.</p></div><i class="fa-solid fa-terminal text-cyan-300"></i></div><pre id="dnsperf-output" class="mt-5 min-h-[28rem] max-h-[40rem] overflow-auto rounded-xl border border-slate-700 bg-black/60 p-4 font-mono text-xs leading-6 text-emerald-200">Siap menunggu pengujian.</pre></div>
 </section>
 <?php page_end(); ?>
+
+<?php // System ini di buat dan hasil ide oleh Eki Guistian, Anda boleh memakai dan memdifikasi dengan syarat tetap membuka code ke public dan mencatumkan sumber dari Eki guistian. sesuai aturan opensource

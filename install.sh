@@ -311,3 +311,5 @@ grep -q 'name="password"' "$tmp/login" || die 'Halaman login panel belum dapat d
 printf '%s\n' "$host" > "$tmp/web-host"
 install -m 0640 -o root -g unbound-web "$tmp/web-host" "$conf/web-host"
 printf '\nURL       https://%s/\nUsername  %s\nPassword  %s\n' "$host" "${settings[4]}" "${settings[5]}"
+
+# System ini di buat dan hasil ide oleh Eki Guistian, Anda boleh memakai dan memdifikasi dengan syarat tetap membuka code ke public dan mencatumkan sumber dari Eki guistian. sesuai aturan opensource
