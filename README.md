@@ -122,9 +122,6 @@ https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/fakenews-g
 Hasil konversi ada di `/var/lib/unbound-web-filters/`. Log ada di `/var/log/unbound-web-filters.log`. Untuk daftar jutaan domain, sediakan RAM tambahan saat validasi dan reload.
 
 ## Screenshot
-
-Klik gambar untuk membuka ukuran penuh.
-
 <table>
   <tr>
     <th scope="col">Login · Gelap</th>
