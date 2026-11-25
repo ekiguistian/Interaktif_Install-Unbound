@@ -9,6 +9,10 @@ $groups = [
     'Jaringan' => ['network'=>'Trafik jaringan'],
 ];
 ?>
+<div class="mb-4 flex justify-end">
+  <a class="btn-secondary" href="https://app.midtrans.com/payment-links/b45ec2c9-80f7-4dd8-b2e9-e18d430d192e-7l5NTR4t"
+    target="_blank" rel="noopener noreferrer">Support me</a>
+</div>
 <div data-dashboard>
   <section class="panel host-strip"><div><strong id="host">Memuat informasi server…</strong><p id="system-info"></p></div>
     <div><span>Unbound</span><strong id="service">—</strong></div>
