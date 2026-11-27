@@ -15,6 +15,7 @@ import re
 import selectors
 import shlex
 import shutil
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -651,6 +652,304 @@ def network_snapshot(body):
     return rows
 
 
+ENCRYPTED_OPTIONS = {"interface", "tls-port", "https-port", "tls-service-key", "tls-service-pem"}
+ENCRYPTED_MANAGED = {
+    Path("/etc/unbound/blocklist/blocklist.conf").resolve(),
+    Path("/etc/unbound/blocklist/whitelist.conf").resolve(),
+    Path("/etc/unbound/unbound.conf.d/90-unbound-web-blocklist.conf").resolve(),
+}
+
+
+def encrypted_config_directives():
+    """Read encrypted-DNS options from the main file and its safe includes."""
+    found = []
+    visited = set()
+    remaining = 8 * 1024 * 1024
+
+    def read(path, inherited="", stack=()):
+        nonlocal remaining
+        path = trusted_config_path(path, Path("/etc/unbound"))
+        if path in ENCRYPTED_MANAGED:
+            return inherited
+        if path in stack or len(visited) >= 128:
+            raise ValueError("Include konfigurasi Unbound berulang atau terlalu dalam.")
+        visited.add(path)
+        if path.stat().st_size > remaining:
+            raise ValueError("Total ukuran konfigurasi melebihi batas pemeriksaan DoT/DoH.")
+        data = path.read_text()
+        remaining -= len(data.encode())
+        if remaining < 0:
+            raise ValueError("Total ukuran konfigurasi melebihi batas pemeriksaan DoT/DoH.")
+        section = inherited
+        for line_number, line in enumerate(data.splitlines(), 1):
+            if section_match := SECTION.fullmatch(line):
+                section = section_match[1]
+                continue
+            directive = DIRECTIVE.match(line)
+            if not directive or directive["comment"]:
+                continue
+            key = directive["key"].lower()
+            values = directive_args(directive["value"])
+            if key in ("include", "include-toplevel"):
+                if len(values) != 1:
+                    raise ValueError("Include konfigurasi Unbound tidak valid.")
+                pattern = values[0]
+                if not pattern.startswith("/"):
+                    pattern = str(Path("/etc/unbound") / pattern)
+                option = Path(pattern)
+                if not option.is_absolute() or ".." in option.parts:
+                    raise ValueError("Include konfigurasi harus berada di /etc/unbound.")
+                wildcard_prefix = re.split(r"[?*\[]", pattern, maxsplit=1)[0]
+                directory = Path(wildcard_prefix) if wildcard_prefix.endswith("/") else Path(wildcard_prefix).parent
+                trusted_config_path(directory, Path("/etc/unbound"))
+                result = section
+                for child in sorted(glob.glob(pattern)):
+                    result = read(Path(child), "" if key == "include-toplevel" else section, (*stack, path))
+                if key == "include":
+                    section = result
+                continue
+            if section == "server" and key in ENCRYPTED_OPTIONS and values:
+                found.append({"key": key, "value": values[0], "path": path, "line": line_number})
+        return section
+
+    read(UNBOUND)
+    return found
+
+
+def encrypted_certificate_state(certificate, key):
+    state = {"certificate": certificate, "key": key, "valid": False, "expires": "", "message": "Sertifikat belum dikonfigurasi."}
+    if not certificate and not key:
+        return state
+    if not certificate or not key:
+        state["message"] = "Path sertifikat dan private key harus diisi berpasangan."
+        return state
+    try:
+        cert_path = Path(certificate)
+        key_path = Path(key)
+        allowed = (Path("/etc/unbound"), Path("/etc/letsencrypt"), Path("/etc/ssl"))
+        cert_base = next((base for base in allowed if cert_path.is_absolute() and cert_path.is_relative_to(base)), None)
+        key_base = next((base for base in allowed if key_path.is_absolute() and key_path.is_relative_to(base)), None)
+        if cert_base is None or key_base is None or ".." in cert_path.parts or ".." in key_path.parts:
+            raise ValueError("Path harus berada di /etc/unbound, /etc/letsencrypt, atau /etc/ssl.")
+        cert_path = trusted_config_path(cert_path, cert_base)
+        key_path = trusted_config_path(key_path, key_base)
+        if not cert_path.is_file() or not key_path.is_file():
+            raise ValueError("File sertifikat atau private key tidak ditemukan.")
+        checked_cert = subprocess.run(["/usr/bin/openssl", "x509", "-in", str(cert_path), "-noout", "-checkend", "0", "-enddate"],
+                                      capture_output=True, text=True, timeout=5)
+        if checked_cert.returncode:
+            raise ValueError("Sertifikat tidak valid atau sudah kedaluwarsa.")
+        start_result = subprocess.run(["/usr/bin/openssl", "x509", "-in", str(cert_path), "-noout", "-startdate"],
+                                      capture_output=True, text=True, check=True, timeout=5)
+        start_match = re.search(r"notBefore=(.+)", start_result.stdout)
+        if not start_match or time.time() < ssl.cert_time_to_seconds(start_match[1]):
+            raise ValueError("Masa berlaku sertifikat belum dimulai.")
+        cert_public = subprocess.run(["/usr/bin/openssl", "x509", "-in", str(cert_path), "-pubkey", "-noout"],
+                                     capture_output=True, text=True, check=True, timeout=5).stdout.strip()
+        key_public = subprocess.run(["/usr/bin/openssl", "pkey", "-in", str(key_path), "-pubout"],
+                                    capture_output=True, text=True, check=True, timeout=5).stdout.strip()
+        if not cert_public or cert_public != key_public:
+            raise ValueError("Private key tidak cocok dengan sertifikat.")
+        chain = subprocess.run(["/usr/bin/openssl", "verify", "-CApath", "/etc/ssl/certs",
+                                "-untrusted", str(cert_path), str(cert_path)],
+                               capture_output=True, text=True, timeout=5)
+        if chain.returncode:
+            raise ValueError("Rantai sertifikat tidak dipercaya sistem. Gunakan fullchain dari CA tepercaya.")
+        expires = re.search(r"notAfter=(.+)", checked_cert.stdout)
+        # Keep the configured symlink path (for example Certbot's /live/ path) so
+        # certificate renewals continue to be picked up after the next restart.
+        state.update(valid=True,
+                     expires=expires[1] if expires else "", message="Sertifikat dipercaya sistem, belum kedaluwarsa, dan private key cocok.")
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        state["message"] = str(error)
+    return state
+
+
+def encrypted_dns_state():
+    directives = encrypted_config_directives()
+    values = {key: [item for item in directives if item["key"] == key] for key in ENCRYPTED_OPTIONS}
+    def option(key, default):
+        return values[key][-1]["value"] if values[key] else default
+
+    tls_port = option("tls-port", "853")
+    https_port = option("https-port", "443")
+    certificate = encrypted_certificate_state(option("tls-service-pem", ""), option("tls-service-key", ""))
+    listener_rows = []
+    for item in values["interface"]:
+        parts = directive_args(item["value"])
+        if len(parts) != 1:
+            continue
+        host, separator, port = parts[0].rpartition("@")
+        if not separator:
+            host, port = parts[0], "53"
+        try:
+            host = str(ipaddress.ip_address(host))
+        except ValueError:
+            pass
+        listener_rows.append({"host": host, "port": port, "path": str(item["path"])})
+
+    def protocol_state(port):
+        matching = [item for item in listener_rows if item["port"] == str(port)]
+        return {"enabled": bool(matching), "listeners": [f'{row["host"]}@{row["port"]}' for row in matching],
+                "interface": matching[0]["host"] if matching else "", "port": str(port)}
+
+    interfaces = []
+    try:
+        result = subprocess.run(["/usr/sbin/ip", "-j", "address", "show", "up"], capture_output=True, text=True, check=True, timeout=3)
+        for link in json.loads(result.stdout):
+            for address in link.get("addr_info", []):
+                try:
+                    ip = ipaddress.ip_address(address.get("local", ""))
+                except ValueError:
+                    continue
+                if not ip.is_loopback and not ip.is_link_local and not ip.is_unspecified and not ip.is_multicast:
+                    interfaces.append({"name": link.get("ifname", ""), "ip": str(ip)})
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+
+    tls_supported, doh_supported = encrypted_dns_capabilities()
+    return {"service": active("unbound"), "interfaces": interfaces, "certificate": certificate,
+            "tls_supported": tls_supported, "doh_supported": doh_supported,
+            "dot": protocol_state(tls_port), "doh": protocol_state(https_port)}
+
+
+def encrypted_dns_capabilities():
+    version = subprocess.run(["/usr/sbin/unbound", "-V"], capture_output=True, text=True, timeout=5)
+    output = (version.stdout + version.stderr).lower() if version.returncode == 0 else ""
+    tls = any(library in output for library in ("openssl", "libressl", "mbedtls", "wolfssl"))
+    return tls, tls and "nghttp2" in output
+
+
+def set_encrypted_dns(protocol, enabled):
+    if protocol not in ("dot", "doh") or enabled not in ("0", "1"):
+        raise ValueError("Pilihan layanan DoT/DoH tidak valid.")
+    data = json.loads(sys.stdin.buffer.read(8193))
+    if not isinstance(data, dict):
+        raise ValueError("Data layanan DoT/DoH tidak valid.")
+    interface, port = data.get("interface"), data.get("port")
+    certificate, key = data.get("certificate", ""), data.get("key", "")
+    if not all(isinstance(value, str) for value in (interface, port, certificate, key)):
+        raise ValueError("Data interface, port, atau sertifikat tidak valid.")
+    if len(interface) > 45 or len(port) > 5 or len(certificate) > 512 or len(key) > 512:
+        raise ValueError("Data layanan DoT/DoH terlalu panjang.")
+    if not re.fullmatch(r"[0-9]{1,5}", port) or not 1 <= int(port) <= 65535:
+        raise ValueError("Port harus berada di antara 1 dan 65535.")
+    try:
+        address = str(ipaddress.ip_address(interface))
+    except ValueError:
+        if enabled == "1":
+            raise ValueError("Pilih alamat IP interface yang terdeteksi di server.")
+        address = interface
+    path = trusted_config_path(UNBOUND, Path("/etc/unbound"))
+    old = path.read_bytes()
+    content = old.decode()
+    directives = encrypted_config_directives()
+    main = path.resolve()
+    setting_keys = {"tls-port", "https-port", "tls-service-key", "tls-service-pem"}
+    included_settings = [item for item in directives if item["key"] in setting_keys and item["path"] != main]
+    requested_port_key = "tls-port" if protocol == "dot" else "https-port"
+    other_protocol = "doh" if protocol == "dot" else "dot"
+    if enabled == "1" and any(item["key"] in {requested_port_key, "tls-service-key", "tls-service-pem"} for item in included_settings):
+        raise ValueError("Opsi TLS sudah didefinisikan pada file include. Kelola opsi tersebut melalui editor konfigurasi utama terlebih dahulu.")
+    if enabled == "1":
+        tls_supported, doh_supported = encrypted_dns_capabilities()
+        if not tls_supported:
+            raise ValueError("Binary Unbound belum mendukung layanan TLS. Pasang paket Unbound yang dibangun dengan dukungan TLS/OpenSSL.")
+        if protocol == "doh" and not doh_supported:
+            raise ValueError("Binary Unbound belum mendukung DoH (libnghttp2). Jalankan installer/pembaruan dan gunakan paket Unbound yang dibangun dengan dukungan nghttp2.")
+
+    current = encrypted_dns_state()
+    cert_state = encrypted_certificate_state(certificate, key) if enabled == "1" else current["certificate"]
+    if enabled == "1" and not cert_state["valid"]:
+        raise ValueError(cert_state["message"])
+    if enabled == "1" and current[other_protocol]["enabled"]:
+        active_cert = current["certificate"]
+        if (active_cert.get("certificate"), active_cert.get("key")) != (cert_state.get("certificate"), cert_state.get("key")):
+            raise ValueError("DoT dan DoH memakai satu pasangan sertifikat. Pertahankan sertifikat aktif yang sama untuk kedua layanan.")
+    actual_ips = {row["ip"] for row in current["interfaces"]}
+    if enabled == "1" and address not in actual_ips:
+        raise ValueError("Alamat IP tersebut tidak lagi aktif pada interface server. Muat ulang halaman.")
+
+    if enabled == "1":
+        directives = encrypted_config_directives()
+        requested_port = str(port)
+        other_port = current[other_protocol]["port"]
+        if requested_port == other_port and current[other_protocol]["enabled"]:
+            raise ValueError("DoT dan DoH tidak dapat memakai port yang sama.")
+        if requested_port_key in {item["key"] for item in directives if item["path"] != main}:
+            raise ValueError("Port layanan TLS dikelola pada file include. Ubah konfigurasi tersebut melalui editor terlebih dahulu.")
+    else:
+        requested_port = str(port)
+
+    lines = content.splitlines(keepends=True)
+    start, end = server_range(lines)
+    if start is None:
+        newline = "\r\n" if "\r\n" in content else "\n"
+        lines[end:end] = ["server:" + newline]
+        start, end = end + 1, end + 1
+    target = f"{address}@{requested_port}"
+    found_main, found_other = [], []
+    in_server = False
+    for index, line in enumerate(lines):
+        if section := SECTION.fullmatch(line.rstrip("\r\n")):
+            in_server = section[1] == "server"
+            continue
+        if not in_server or not (match := NETWORK_LINE.fullmatch(line.rstrip("\r\n"))) or match["key"] != "interface":
+            continue
+        tokens = directive_args(match["token"])
+        if not tokens:
+            continue
+        host, separator, current_port = tokens[0].rpartition("@")
+        if separator and current_port == requested_port and host == address:
+            managed_listener = "# Unbound Web Manager encrypted DNS" in line
+            if enabled == "1" and not managed_listener:
+                raise ValueError("Interface dan port tersebut sudah dipakai konfigurasi Unbound. Pilih port lain atau kelola listener itu dari editor konfigurasi.")
+            if enabled == "0" and not managed_listener:
+                raise ValueError("Listener ini tidak dibuat oleh toggle DoT/DoH. Hapus atau ubah listener tersebut melalui editor konfigurasi.")
+            found_main.append(index)
+    for item in encrypted_config_directives():
+        if item["key"] != "interface" or item["path"] == main:
+            continue
+        tokens = directive_args(item["value"])
+        if tokens:
+            host, separator, port_value = tokens[0].rpartition("@")
+            if separator and port_value == requested_port and (enabled == "0" or tokens[0] == target):
+                found_other.append(item)
+    if enabled == "0" and found_other:
+        raise ValueError("Interface terenkripsi didefinisikan di file include. Hapus listener tersebut dari file include terlebih dahulu.")
+    if enabled == "1" and not found_main and not found_other:
+        newline = "\r\n" if "\r\n" in content else "\n"
+        indent = next((match["indent"] for line in lines[start:end] if (match := DIRECTIVE.match(line)) and match["indent"]), "    ")
+        insert_at = end
+        while insert_at > start and not lines[insert_at - 1].strip():
+            insert_at -= 1
+        lines.insert(insert_at, f'{indent}interface: "{target}"  # Unbound Web Manager encrypted DNS{newline}')
+    elif enabled == "0" and found_main:
+        for index in reversed(found_main):
+            del lines[index]
+    content = "".join(lines)
+
+    active_other = current[other_protocol]["enabled"] and enabled == "0"
+    if enabled == "1":
+        content = edit_server(content, {requested_port_key: requested_port,
+                                        "tls-service-pem": json.dumps(cert_state["certificate"]),
+                                        "tls-service-key": json.dumps(cert_state["key"])})
+    elif not active_other:
+        # Keep the TLS certificate options in place; without an encrypted listener they
+        # do not expose a service, and retaining them preserves manually managed TLS settings.
+        pass
+    data_bytes = content.encode()
+    if data_bytes != old:
+        validate_web_config("unbound", content)
+        running = active("unbound") == "active"
+        apply_config("unbound", path, old, data_bytes, reload=running, restart=running,
+                     after=record_config)
+        print("Konfigurasi " + ("DoT" if protocol == "dot" else "DoH") + (" diaktifkan." if enabled == "1" else " dinonaktifkan.")
+              + (" Unbound dimulai ulang." if running else " Perubahan berlaku saat Unbound dijalankan."))
+    else:
+        print("Tidak ada perubahan pada konfigurasi.")
+
+
 def loopback_interfaces(body):
     return Counter(row["value"] for row in network_snapshot(body)["interface"] if row["loopback"])
 
@@ -1077,6 +1376,8 @@ def main(args):
         live_unbound_log()
     elif op == "unbound-logging-state" and not params:
         print(json.dumps(logging_state()))
+    elif op == "encrypted-dns-state" and not params:
+        print(json.dumps(encrypted_dns_state()))
     elif op in ("stats", "stats-live") and not params:
         subprocess.run(["unbound-control", "-c", str(control_config()), "stats_noreset"],
                        check=True, timeout=0.6 if op == "stats-live" else 8)
@@ -1105,6 +1406,8 @@ def main(args):
                 editor(op, *params)
             elif op == "unbound-network-save" and len(params) == 2:
                 save_network(*params)
+            elif op == "encrypted-dns-set" and len(params) == 2:
+                set_encrypted_dns(*params)
             elif op in ("zabbix-metrics-enable", "zabbix-metrics-disable") and not params:
                 set_zabbix_metrics(op.endswith("-enable"))
             elif op == "unbound-logging-set" and len(params) == 2 and params[0] in LOG_OPTIONS and params[1] in ("yes", "no"):

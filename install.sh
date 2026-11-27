@@ -48,12 +48,12 @@ for package in "${php_packages[@]}"; do
         break
     fi
 done
-for package in "${php_packages[@]}" dnsperf; do
+for package in "${php_packages[@]}" dnsperf libnghttp2-14 libnghttp2-dev; do
     has_candidate "$package" || die "Paket $package belum tersedia. Periksa repository Ubuntu ${VERSION_CODENAME:-}, universe, dan PPA ondrej/php."
 done
 step 'Memasang MySQL, PHP 8.4, Nginx, dan dependensi panel'
 "${apt[@]}" install -y mysql-server mysql-client nginx "${php_packages[@]}" \
-    openssl sudo cron curl rsync python3 dnsperf iproute2 git
+    openssl sudo cron curl rsync python3 dnsperf iproute2 git libnghttp2-14 libnghttp2-dev
 php8.4 -r 'exit(PHP_VERSION_ID >= 80400 && extension_loaded("pdo_mysql") && extension_loaded("openssl") && in_array("argon2id", password_algos(), true) ? 0 : 1);' || die 'PHP 8.4 membutuhkan pdo_mysql, OpenSSL, dan Argon2id.'
 
 host=${WEB_HOST:-}

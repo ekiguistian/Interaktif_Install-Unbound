@@ -66,6 +66,35 @@ try {
             $result = manage([$action, $revision, $line], json_encode(compact('kind', 'value', 'target'), JSON_THROW_ON_ERROR), 600);
             json_response(['ok' => $result['code'] === 0, 'message' => trim($result['output'])], $result['code'] === 0 ? 200 : 422);
 
+        case 'encrypted-dns-state':
+            session_write_close();
+            $result = manage([$action], null, 12);
+            $state = $result['code'] === 0 ? json_decode($result['output'], true) : null;
+            if (!is_array($state)) {
+                json_response(['ok' => false, 'message' => trim($result['output']) ?: 'Status DoT/DoH belum tersedia.'], 422);
+            }
+            json_response(['ok' => true, 'state' => $state]);
+
+        case 'encrypted-dns-toggle':
+            $protocol = $payload['protocol'] ?? '';
+            $enabled = $payload['enabled'] ?? '';
+            $interface = $payload['interface'] ?? '';
+            $port = $payload['port'] ?? '';
+            $certificate = $payload['certificate'] ?? '';
+            $key = $payload['key'] ?? '';
+            if (!in_array($protocol, ['dot', 'doh'], true) || !in_array($enabled, ['0', '1'], true)
+                || !is_string($interface) || strlen($interface) > 45
+                || !is_string($port) || !preg_match('/^[0-9]{1,5}$/D', $port)
+                || !is_string($certificate) || strlen($certificate) > 512
+                || !is_string($key) || strlen($key) > 512) {
+                fail_validation('Pilihan interface, port, atau sertifikat DoT/DoH tidak valid.');
+            }
+            session_write_close();
+            set_time_limit(0);
+            $input = json_encode(compact('interface', 'port', 'certificate', 'key'), JSON_THROW_ON_ERROR);
+            $result = manage(['encrypted-dns-set', $protocol, $enabled], $input, 600);
+            json_response(['ok' => $result['code'] === 0, 'message' => trim($result['output'])], $result['code'] === 0 ? 200 : 422);
+
         case 'config-save':
             $service = $payload['service'] ?? '';
             $content = $payload['content'] ?? null;

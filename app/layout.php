@@ -33,6 +33,8 @@ HTML;
         $path = str_starts_with((string)$path, '/admin/') ? '/settings/' . substr($path, 7) : $path;
         $unboundLinks = [
             ['/settings/unbound', 'Kontrol & file'],
+            ['/settings/unbound-dot', 'DoT'],
+            ['/settings/unbound-doh', 'DoH'],
             ['/settings/unbound-log', 'Log langsung'],
             ['/settings/blocklists', 'Blocklist & Whitelist'],
             ['/settings/cron', 'Jadwal'],
